@@ -46,6 +46,7 @@ export async function pathGet(name: string): Promise<{
   readyTime?: string;
   bytesReceived: number;
   bytesSent: number;
+  readers: Array<{ type: string; id: string }>;
 }> {
   const res = await fetch(`${API_BASE}/v3/paths/get/${encodeURIComponent(name)}`, {
     credentials: 'include',
@@ -53,7 +54,7 @@ export async function pathGet(name: string): Promise<{
   return handle(res);
 }
 
-export async function hlsMuxersList(): Promise<{ items: Array<{ name: string; readers: unknown[] }> }> {
+export async function hlsMuxersList(): Promise<{ items: Array<{ name: string; readers: Array<{ type: string; id: string }> }> }> {
   const res = await fetch(`${API_BASE}/v3/hls/muxers/list`, { credentials: 'include' });
   return handle(res);
 }

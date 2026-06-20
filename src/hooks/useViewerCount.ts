@@ -1,15 +1,16 @@
 import { useQuery } from '@tanstack/react-query';
-import { hlsMuxersList } from '@/lib/api';
+import { pathGet } from '@/lib/api';
 
 export function useViewerCount() {
   return useQuery({
     queryKey: ['stream', 'viewers'],
     queryFn: async () => {
-      const res = await hlsMuxersList();
-      const total = res.items
-        .filter((m) => m.name === 'live')
-        .reduce((acc, m) => acc + (m.readers?.length ?? 0), 0);
-      return total;
+      try {
+        const path = await pathGet('live');
+        return path.readers?.length ?? 0;
+      } catch {
+        return 0;
+      }
     },
     refetchInterval: 5_000,
   });
