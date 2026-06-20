@@ -1,0 +1,13 @@
+{
+  "channel": {
+    "name": "Cup",
+    "avatar": "/avatars/cup.png"
+  },
+  "title": "Building things live",
+  "category": "Software & Game Development",
+  "tags": ["live", "coding", "rust"],
+  "description": "Live coding, debugging, and yak-shaving. Drop into chat and say hi.",
+  "socials": {
+    "github": "https://github.com/"
+  }
+}

@@ -1,0 +1,12 @@
+/resources
+/PLAN.md
+/node_modules
+/dist
+/auth-svc/dist
+/auth-svc/auth-svc
+/auth-svc/.env
+*.log
+.DS_Store
+.env
+.env.local
+*.md
