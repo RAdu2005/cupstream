@@ -5,6 +5,7 @@ import { Tv, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { login } from '@/lib/api';
+import type { AuthStatus } from '@/lib/types';
 
 export function LoginPage() {
   const nav = useNavigate();
@@ -19,11 +20,16 @@ export function LoginPage() {
   const mut = useMutation({
     mutationFn: (vars: { username: string; password: string }) =>
       login(vars.username, vars.password),
-    onSuccess: async (ok) => {
-      if (ok) {
-        await qc.invalidateQueries({ queryKey: ['auth'] });
-        nav(from, { replace: true });
-      }
+    onSuccess: (ok, vars) => {
+      if (!ok) return;
+      // Update the auth cache immediately so ProtectedRoute doesn't see
+      // a stale { authenticated: false } and bounce us back to /login
+      // while the refetch from invalidateQueries is in flight.
+      qc.setQueryData<AuthStatus>(['auth'], {
+        authenticated: true,
+        username: vars.username.trim(),
+      });
+      nav(from, { replace: true });
     },
   });
 
