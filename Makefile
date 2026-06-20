@@ -16,7 +16,7 @@ dev-backend:
 
 build:
 	npm run build
-	cd auth-svc && CGO_ENABLED=0 go build -ldflags="-s -w" -trimpath -o auth-svc .
+	cd auth-svc && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -trimpath -o auth-svc .
 
 deploy: build
 	@if [ -z "$$VPS" ]; then echo "Set VPS=user@host"; exit 1; fi
