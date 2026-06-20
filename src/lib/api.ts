@@ -35,22 +35,15 @@ export async function authStatus(): Promise<AuthStatus> {
   return res.json();
 }
 
-export async function pathsList(): Promise<{ items: Array<{ name: string; ready: boolean; readyTime?: string }> }> {
-  const res = await fetch(`${API_BASE}/v3/paths/list`, { credentials: 'include' });
-  return handle(res);
-}
-
-export async function pathGet(name: string): Promise<{
-  name: string;
-  ready: boolean;
-  readyTime?: string;
-  bytesReceived: number;
-  bytesSent: number;
-  readers: Array<{ type: string; id: string }>;
+export async function pathsList(): Promise<{
+  items: Array<{
+    name: string;
+    ready: boolean;
+    readyTime?: string;
+    readers?: Array<{ type: string; id: string }>;
+  }>;
 }> {
-  const res = await fetch(`${API_BASE}/v3/paths/get/${encodeURIComponent(name)}`, {
-    credentials: 'include',
-  });
+  const res = await fetch(`${API_BASE}/v3/paths/list`, { credentials: 'include' });
   return handle(res);
 }
 

@@ -1,4 +1,3 @@
-import { useQuery } from '@tanstack/react-query';
 import { Eye } from 'lucide-react';
 import { useViewerCount } from '@/hooks/useViewerCount';
 import { useStreamStatus } from '@/hooks/useStreamStatus';

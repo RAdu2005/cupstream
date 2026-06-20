@@ -1,0 +1,1 @@
+make build && sudo install -m 0755 auth-svc/auth-svc /usr/local/bin/auth-svc && sudo systemctl restart auth-svc
