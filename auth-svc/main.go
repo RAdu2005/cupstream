@@ -77,16 +77,40 @@ func main() {
 			Prompt:     autocert.AcceptTOS,
 			HostPolicy: autocert.HostWhitelist("cup.larp.love"),
 		}
-		server.TLSConfig = cm.TLSConfig()
+
+		// :80 — Cloudflare-aware. With Cloudflare SSL = "Flexible", Cloudflare
+		// origin-pulls over HTTP. If we redirect HTTP→HTTPS there, the browser
+		// follows the redirect, Cloudflare forwards it, the origin returns
+		// another redirect, loop. So: if the request has CF-Connecting-IP,
+		// it's a Cloudflare origin pull — serve the mux. Otherwise it's a
+		// direct hit — redirect to HTTPS.
+		httpHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("CF-Connecting-IP") != "" {
+				mux.ServeHTTP(w, r)
+				return
+			}
+			target := "https://" + r.Host + r.URL.RequestURI()
+			http.Redirect(w, r, target, http.StatusMovedPermanently)
+		})
+
+		httpSrv := &http.Server{
+			Addr:              ":80",
+			Handler:           httpHandler,
+			ReadHeaderTimeout: 10 * time.Second,
+		}
+		httpsSrv := &http.Server{
+			Addr:              ":" + port,
+			Handler:           mux,
+			TLSConfig:         cm.TLSConfig(),
+			ReadHeaderTimeout: 10 * time.Second,
+		}
 
 		go func() {
-			log.Printf("http→https redirect on :80")
-			if err := http.ListenAndServe(":80", cm.HTTPHandler(nil)); err != nil {
-				log.Fatalf("http listener: %v", err)
-			}
+			log.Printf("http on :80 (cloudflare-aware)")
+			log.Fatal(httpSrv.ListenAndServe())
 		}()
 		log.Printf("https on :%s", port)
-		check(server.ListenAndServeTLS("", ""))
+		check(httpsSrv.ListenAndServeTLS("", ""))
 	}
 
 	log.Printf("http (no TLS) on :%s — dev mode", port)
