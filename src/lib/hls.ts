@@ -29,15 +29,16 @@ export function attachHls(video: HTMLVideoElement, url: string): HlsHandle {
   }
 
   const config: Partial<HlsConfig> = {
-    // LL-HLS tuned for ~1-2s glass-to-glass
     enableWorker: true,
     lowLatencyMode: true,
-    liveSyncDurationCount: 2,
-    liveMaxLatencyDurationCount: 4,
-    backBufferLength: 30,
-    maxBufferLength: 6,
-    maxMaxBufferLength: 10,
-    maxLoadingDelay: 4,
+    // 3 segments * 1s = 3s of buffer (stable playback)
+    liveSyncDurationCount: 3,
+    liveMaxLatencyDurationCount: 6,
+    backBufferLength: 60,
+    // Generous buffer to ride out network blips
+    maxBufferLength: 30,
+    maxMaxBufferLength: 60,
+    maxLoadingDelay: 8,
     // ensure cookies ride on every segment + playlist request
     xhrSetup: (xhr) => {
       xhr.withCredentials = true;
