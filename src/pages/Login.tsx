@@ -25,10 +25,10 @@ export function LoginPage() {
       // Update the auth cache immediately so ProtectedRoute doesn't see
       // a stale { authenticated: false } and bounce us back to /login
       // while the refetch from invalidateQueries is in flight.
-      qc.setQueryData<AuthStatus>(['auth'], {
+      qc.setQueryData(['auth'], {
         authenticated: true,
         username: vars.username.trim(),
-      });
+      } as AuthStatus);
       nav(from, { replace: true });
     },
   });

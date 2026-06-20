@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { pathsList, pathGet } from '@/lib/api';
+import { pathsList } from '@/lib/api';
 
 export function useStreamStatus() {
   return useQuery({
@@ -11,17 +11,10 @@ export function useStreamStatus() {
         isLive: !!live?.ready,
         readyTime: live?.readyTime,
         name: live?.name,
+        readers: live?.readers?.length ?? 0,
       };
     },
     refetchInterval: 5_000,
     refetchOnWindowFocus: true,
-  });
-}
-
-export function useStreamInfo() {
-  return useQuery({
-    queryKey: ['stream', 'info'],
-    queryFn: () => pathGet('live'),
-    refetchInterval: 10_000,
   });
 }
