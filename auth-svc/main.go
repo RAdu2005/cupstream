@@ -18,11 +18,11 @@ import (
 )
 
 var (
-	passwordHash []byte
-	jwtSecret    []byte
-	mediamtxAPI  *url.URL
-	mediamtxHLS  *url.URL
-	hub          *ChatHub
+	passwordHash    []byte
+	jwtSecret       []byte
+	mediamtxAPI     *url.URL
+	mediamtxWebRTC  *url.URL
+	hub             *ChatHub
 )
 
 func main() {
@@ -42,7 +42,7 @@ func main() {
 	var err error
 	mediamtxAPI, err = url.Parse(getEnv("MEDIAMTX_API", "http://127.0.0.1:9997"))
 	check(err)
-	mediamtxHLS, err = url.Parse(getEnv("MEDIAMTX_HLS", "http://127.0.0.1:8888"))
+	mediamtxWebRTC, err = url.Parse(getEnv("MEDIAMTX_WEBRTC", "http://127.0.0.1:8889"))
 	check(err)
 
 	hub = newChatHub()
@@ -56,9 +56,9 @@ func main() {
 	mux.HandleFunc("GET /api/chat/ws", hub.wsHandler)
 
 	apiProxy := &httputil.ReverseProxy{Director: mediamtxAPIDirector, ErrorHandler: proxyError}
-	hlsProxy := newHLSProxy()
+	whepProxy := newWHEPProxy()
 	mux.Handle("/api/mediamtx/", requireAuth(apiProxy))
-	mux.Handle("/live/", requireAuth(hlsProxy))
+	mux.Handle("/live/", requireAuth(whepProxy))
 	mux.Handle("/", spaHandler(distFSys()))
 
 	port := getEnv("PORT", "443")

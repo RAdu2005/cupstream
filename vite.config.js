@@ -13,6 +13,10 @@ export default defineConfig({
         host: true,
         proxy: {
             '/api': { target: 'http://localhost:9999', changeOrigin: true, ws: true },
+            // WHEP signaling: POST/PATCH/DELETE on /live/whep[/...] are proxied
+            // to auth-svc, which in turn forwards them to MediaMTX's WHEP
+            // listener. ICE-trickle PATCHes are short-lived here, so no extra
+            // timeout is needed.
             '/live': { target: 'http://localhost:9999', changeOrigin: true },
         },
     },

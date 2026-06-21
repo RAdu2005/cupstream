@@ -7,7 +7,7 @@ import { StreamTags } from '@/components/stream/StreamTags';
 import { StreamDescription } from '@/components/stream/StreamDescription';
 import { ViewerCount } from '@/components/stream/ViewerCount';
 
-const HLS_URL = import.meta.env.VITE_HLS_URL;
+const WHEP_URL = import.meta.env.VITE_WHEP_URL;
 
 export function Watch() {
   const { data: status } = useStreamStatus();
@@ -17,7 +17,7 @@ export function Watch() {
     <div className="grid h-full grid-cols-1 lg:grid-cols-[1fr_320px] xl:grid-cols-[1fr_360px]">
       <div className="min-w-0 overflow-y-auto p-4">
         <div className="mx-auto max-w-5xl space-y-4">
-          {isLive ? <StreamPlayer src={HLS_URL} /> : <OfflineScreen />}
+          {isLive ? <StreamPlayer whepUrl={WHEP_URL} /> : <OfflineScreen />}
 
           <div className="flex flex-wrap items-center justify-between gap-2">
             <StreamHeader />
