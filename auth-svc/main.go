@@ -38,6 +38,7 @@ func main() {
 
 	passwordHash = []byte(mustEnv("PASSWORD_HASH"))
 	jwtSecret = []byte(mustEnv("JWT_SECRET"))
+	loadMTXAuth()
 
 	var err error
 	mediamtxAPI, err = url.Parse(getEnv("MEDIAMTX_API", "http://127.0.0.1:9997"))
@@ -54,6 +55,16 @@ func main() {
 	mux.HandleFunc("GET /api/auth/status", handleStatus)
 	mux.Handle("GET /api/chat/history", requireAuth(http.HandlerFunc(hub.historyHandler)))
 	mux.HandleFunc("GET /api/chat/ws", hub.wsHandler)
+
+	// Dedicated localhost-only listener for MediaMTX's auth callback.
+	// No session cookie, no TLS — MediaMTX is a trusted local peer.
+	mtxAuthMux := http.NewServeMux()
+	mtxAuthMux.HandleFunc("POST /", handleMTXAuth)
+	mtxAuthAddr := getEnv("MEDIAMTX_AUTH_ADDR", "127.0.0.1:9998")
+	go func() {
+		log.Printf("mediamtx auth on %s", mtxAuthAddr)
+		log.Fatal(http.ListenAndServe(mtxAuthAddr, mtxAuthMux))
+	}()
 
 	apiProxy := &httputil.ReverseProxy{Director: mediamtxAPIDirector, ErrorHandler: proxyError}
 	whepProxy := newWHEPProxy()
