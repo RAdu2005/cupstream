@@ -35,6 +35,7 @@ jobs:
           cd auth-svc
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
             -ldflags="-s -w" -trimpath -o auth-svc .
+          mv auth-svc auth-svc-linux-amd64
 
       - name: Run Go tests
         run: |
@@ -47,8 +48,8 @@ jobs:
 
           # --- Generate test credentials ---
           JWT_SECRET="$(openssl rand -hex 32)"
-          PASSWORD_HASH="$(./auth-svc/auth-svc hash testadmin)"
-          PUBLISH_HASH="$(./auth-svc/auth-svc hash testobs)"
+          PASSWORD_HASH="$(./auth-svc/auth-svc-linux-amd64 hash testadmin)"
+          PUBLISH_HASH="$(./auth-svc/auth-svc-linux-amd64 hash testobs)"
 
           # --- Write test env ---
           cat > .env <<EOF
@@ -83,7 +84,7 @@ jobs:
 
           # --- Start auth-svc ---
           export $(grep -v '^#' .env | xargs)
-          ./auth-svc/auth-svc &
+          ./auth-svc/auth-svc-linux-amd64 &
           AUTH_PID=$!
           sleep 2
 
@@ -128,7 +129,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: auth-svc-linux-amd64
-          path: auth-svc/auth-svc
+          path: auth-svc/auth-svc-linux-amd64
 
       - name: Build Docker image
         run: docker build -t auth-svc:test .
@@ -158,10 +159,10 @@ jobs:
           npm run build
           cd auth-svc
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-            -ldflags="-s -w" -trimpath -o auth-svc .
+            -ldflags="-s -w" -trimpath -o auth-svc-linux-amd64 .
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: auth-svc/auth-svc
+          files: auth-svc/auth-svc-linux-amd64
           generate_release_notes: true
