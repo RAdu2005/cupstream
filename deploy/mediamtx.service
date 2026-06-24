@@ -1,0 +1,20 @@
+[Unit]
+Description=MediaMTX streaming server
+After=network.target
+
+[Service]
+Type=simple
+User=mediamtx
+Group=mediamtx
+ExecStart=/usr/local/bin/mediamtx /etc/mediamtx/mediamtx.yml
+Restart=on-failure
+RestartSec=2
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/mediamtx
+
+[Install]
+WantedBy=multi-user.target

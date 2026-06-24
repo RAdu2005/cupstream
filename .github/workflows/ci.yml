@@ -1,0 +1,167 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Build frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build backend
+        run: |
+          cd auth-svc
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+            -ldflags="-s -w" -trimpath -o auth-svc .
+
+      - name: Run Go tests
+        run: |
+          cd auth-svc
+          go test ./...
+
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+
+          # --- Generate test credentials ---
+          JWT_SECRET="$(openssl rand -hex 32)"
+          PASSWORD_HASH="$(./auth-svc/auth-svc hash testadmin)"
+          PUBLISH_HASH="$(./auth-svc/auth-svc hash testobs)"
+
+          # --- Write test env ---
+          cat > .env <<EOF
+          DOMAIN=localhost
+          MEDIAMTX_DOMAIN=localhost
+          PASSWORD_HASH=${PASSWORD_HASH}
+          JWT_SECRET=${JWT_SECRET}
+          MEDIAMTX_API=http://127.0.0.1:9997
+          MEDIAMTX_WEBRTC=http://127.0.0.1:8889
+          MEDIAMTX_PUBLISH_USER=obs
+          MEDIAMTX_PUBLISH_HASH=${PUBLISH_HASH}
+          MEDIAMTX_AUTH_ADDR=127.0.0.1:9998
+          PORT=9999
+          TLS=no
+          CERT_DIR=/tmp/auth-svc-certs
+          EOF
+
+          # --- Download MediaMTX ---
+          MTX_TAG="$(curl -fsSL https://api.github.com/repos/bluenviron/mediamtx/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')"
+          MTX_VER="${MTX_TAG#v}"
+          curl -fsSL -o /tmp/mediamtx.tar.gz \
+            "https://github.com/bluenviron/mediamtx/releases/download/${MTX_TAG}/mediamtx_v${MTX_VER}_linux_amd64.tar.gz"
+          tar -xzf /tmp/mediamtx.tar.gz -C /tmp
+
+          # --- Prepare MediaMTX config ---
+          sed 's|__MEDIAMTX_DOMAIN__|localhost|g' deploy/mediamtx.yml > /tmp/mediamtx.yml
+
+          # --- Start MediaMTX ---
+          /tmp/mediamtx /tmp/mediamtx.yml &
+          MTX_PID=$!
+          sleep 2
+
+          # --- Start auth-svc ---
+          export $(grep -v '^#' .env | xargs)
+          ./auth-svc/auth-svc &
+          AUTH_PID=$!
+          sleep 2
+
+          cleanup() {
+            kill $AUTH_PID $MTX_PID 2>/dev/null || true
+            wait 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          # --- Tests ---
+          echo "=== Test: unauthenticated status ==="
+          curl -fsSL http://127.0.0.1:9999/api/auth/status | grep -q '"authenticated":false'
+          echo "PASS"
+
+          echo "=== Test: login with wrong password ==="
+          if curl -fsSL -X POST http://127.0.0.1:9999/api/login \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"admin","password":"wrong"}' 2>/dev/null; then
+            echo "FAIL: expected 401"
+            exit 1
+          fi
+          echo "PASS"
+
+          echo "=== Test: login with correct password ==="
+          curl -fsSL -X POST http://127.0.0.1:9999/api/login \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"admin","password":"testadmin"}' \
+            -c /tmp/cookies.txt
+          echo "PASS"
+
+          echo "=== Test: authenticated status ==="
+          curl -fsSL http://127.0.0.1:9999/api/auth/status -b /tmp/cookies.txt | grep -q '"authenticated":true'
+          echo "PASS"
+
+          echo "=== Test: MediaMTX API proxy ==="
+          curl -fsSL http://127.0.0.1:9999/api/mediamtx/v3/paths/list -b /tmp/cookies.txt | grep -q '"items"'
+          echo "PASS"
+
+          echo "=== All smoke tests passed ==="
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: auth-svc-linux-amd64
+          path: auth-svc/auth-svc
+
+      - name: Build Docker image
+        run: docker build -t auth-svc:test .
+
+  release:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Build release binary
+        run: |
+          npm ci
+          npm run build
+          cd auth-svc
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+            -ldflags="-s -w" -trimpath -o auth-svc .
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: auth-svc/auth-svc
+          generate_release_notes: true

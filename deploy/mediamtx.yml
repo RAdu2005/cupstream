@@ -1,0 +1,262 @@
+# Global settings
+
+###############################################
+# Global settings -> General
+
+logLevel: info
+logDestinations: [stdout]
+logStructured: false
+readTimeout: 10s
+writeTimeout: 10s
+writeQueueSize: 512
+udpMaxPayloadSize: 1452
+
+###############################################
+# Global settings -> Authentication
+
+authMethod: http
+authInternalUsers: []
+authHTTPAddress: http://127.0.0.1:9998/
+authHTTPFingerprint:
+authHTTPExclude:
+  - action: api
+  - action: metrics
+  - action: pprof
+authJWTJWKS:
+authJWTJWKSFingerprint:
+authJWTClaimKey: mediamtx_permissions
+authJWTExclude: []
+authJWTIssuer:
+authJWTAudience:
+
+###############################################
+# Global settings -> Control API
+
+api: true
+apiAddress: :9997
+apiEncryption: false
+apiServerKey: server.key
+apiServerCert: server.crt
+apiAllowOrigins: ["*"]
+apiTrustedProxies: []
+
+###############################################
+# Global settings -> Metrics server
+
+metrics: false
+metricsAddress: :9995
+metricsEncryption: false
+metricsServerKey: server.key
+metricsServerCert: server.crt
+metricsAllowOrigins: ["*"]
+metricsTrustedProxies: []
+
+###############################################
+# Global settings -> PPROF server
+
+pprof: false
+pprofAddress: :9999
+pprofEncryption: false
+pprofServerKey: server.key
+pprofServerCert: server.crt
+pprofAllowOrigins: ["*"]
+pprofTrustedProxies: []
+
+###############################################
+# Global settings -> Playback server
+
+playback: false
+playbackAddress: :9996
+playbackEncryption: false
+playbackServerKey: server.key
+playbackServerCert: server.crt
+playbackAllowOrigins: ["*"]
+playbackTrustedProxies: []
+
+###############################################
+# Global settings -> RTSP server
+
+rtsp: false
+rtspTransports: [udp, multicast, tcp]
+rtspEncryption: "no"
+rtspAddress: :8554
+rtspsAddress: :8322
+rtpAddress: :8000
+rtcpAddress: :8001
+multicastIPRange: 224.1.0.0/16
+multicastRTPPort: 8002
+multicastRTCPPort: 8003
+srtpAddress: :8004
+srtcpAddress: :8005
+multicastSRTPPort: 8006
+multicastSRTCPPort: 8007
+rtspServerKey: server.key
+rtspServerCert: server.crt
+rtspAuthMethods: [basic]
+rtspTrustedProxies: []
+
+###############################################
+# Global settings -> RTMP server
+
+rtmp: false
+rtmpEncryption: "no"
+rtmpAddress: :1935
+rtmpsAddress: :1936
+rtmpServerKey: server.key
+rtmpServerCert: server.crt
+rtmpTrustedProxies: []
+
+###############################################
+# Global settings -> HLS server
+
+hls: false
+hlsAddress: :8888
+hlsEncryption: false
+hlsServerKey: server.key
+hlsServerCert: server.crt
+hlsAllowOrigins: ["*"]
+hlsTrustedProxies: []
+hlsAlwaysRemux: false
+hlsVariant: lowLatency
+hlsSegmentCount: 7
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
+hlsSegmentMaxSize: 50M
+hlsDirectory: ""
+hlsMuxerCloseAfter: 60s
+hlsCDNSecret: ""
+
+###############################################
+# Global settings -> WebRTC server
+
+webrtc: true
+webrtcAddress: :8889
+webrtcEncryption: false
+webrtcServerKey: server.key
+webrtcServerCert: server.crt
+webrtcAllowOrigins: ["*"]
+webrtcTrustedProxies: []
+webrtcLocalUDPAddress: :8189
+webrtcLocalTCPAddress: ""
+webrtcIPsFromInterfaces: true
+webrtcIPsFromInterfacesList: []
+webrtcAdditionalHosts: ["__MEDIAMTX_DOMAIN__"]
+webrtcICEServers2:
+  - url: stun:stun.l.google.com:19302
+webrtcSTUNGatherTimeout: 5s
+webrtcHandshakeTimeout: 10s
+webrtcTrackGatherTimeout: 2s
+
+###############################################
+# Global settings -> SRT server
+
+srt: false
+srtAddress: :8890
+
+###############################################
+# MoQ server
+
+moq: false
+moqHTTP2Address: :8892
+moqHTTP3Address: :8892
+moqServerKey: auto.key
+moqServerCert: auto.crt
+moqAllowOrigins: ["*"]
+moqTrustedProxies: []
+
+###############################################
+# Default path settings
+
+pathDefaults:
+  source: publisher
+  sourceFingerprint:
+  sourceOnDemand: false
+  sourceOnDemandStartTimeout: 10s
+  sourceOnDemandCloseAfter: 10s
+  maxReaders: 0
+  srtReadPassphrase:
+  useAbsoluteTimestamp: false
+  alwaysAvailable: false
+  alwaysAvailableTracks: []
+  alwaysAvailableFile: ""
+  record: false
+  recordPath: ./recordings/%path/%Y-%m-%d_%H-%M-%S-%f
+  recordFormat: fmp4
+  recordPartDuration: 1s
+  recordMaxPartSize: 50M
+  recordSegmentDuration: 1h
+  recordDeleteAfter: 1d
+  overridePublisher: true
+  srtPublishPassphrase:
+  rtspDemuxMpegts: false
+  rtspTransport: automatic
+  rtspAnyPort: false
+  rtspRangeType:
+  rtspRangeStart:
+  rtspUDPSourcePortRange: [10000, 65535]
+  rtpSDP:
+  whepBearerToken: ""
+  whepSTUNGatherTimeout: 5s
+  whepHandshakeTimeout: 10s
+  whepTrackGatherTimeout: 2s
+  sourceRedirect:
+  rpiCameraCamID: 0
+  rpiCameraSecondary: false
+  rpiCameraWidth: 1920
+  rpiCameraHeight: 1080
+  rpiCameraHFlip: false
+  rpiCameraVFlip: false
+  rpiCameraBrightness: 0
+  rpiCameraContrast: 1
+  rpiCameraSaturation: 1
+  rpiCameraSharpness: 1
+  rpiCameraExposure: normal
+  rpiCameraAWB: auto
+  rpiCameraAWBGains: [0, 0]
+  rpiCameraDenoise: "off"
+  rpiCameraShutter: 0
+  rpiCameraMetering: centre
+  rpiCameraGain: 0
+  rpiCameraEV: 0
+  rpiCameraROI:
+  rpiCameraHDR: false
+  rpiCameraTuningFile:
+  rpiCameraMode:
+  rpiCameraFPS: 30
+  rpiCameraAfMode: continuous
+  rpiCameraAfRange: normal
+  rpiCameraAfSpeed: normal
+  rpiCameraLensPosition: 0.0
+  rpiCameraAfWindow:
+  rpiCameraFlickerPeriod: 0
+  rpiCameraTextOverlayEnable: false
+  rpiCameraTextOverlay: "%Y-%m-%d %H:%M:%S - MediaMTX"
+  rpiCameraCodec: auto
+  rpiCameraIDRPeriod: 60
+  rpiCameraBitrate: 5000000
+  rpiCameraHardwareH264Profile: main
+  rpiCameraHardwareH264Level: "4.1"
+  rpiCameraSoftwareH264Profile: baseline
+  rpiCameraSoftwareH264Level: "4.1"
+  rpiCameraMJPEGQuality: 60
+  runOnInit:
+  runOnInitRestart: false
+  runOnDemand:
+  runOnDemandRestart: false
+  runOnDemandStartTimeout: 10s
+  runOnDemandCloseAfter: 10s
+  runOnUnDemand:
+  runOnReady:
+  runOnReadyRestart: false
+  runOnNotReady:
+  runOnRead:
+  runOnReadRestart: false
+  runOnUnread:
+  runOnRecordSegmentCreate:
+  runOnRecordSegmentComplete:
+
+###############################################
+# Path settings
+
+paths:
+  all_others:

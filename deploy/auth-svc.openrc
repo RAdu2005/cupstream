@@ -1,0 +1,21 @@
+#!/sbin/openrc-run
+
+description="Cup stream auth-svc"
+
+command="/usr/local/bin/auth-svc"
+command_user="auth-svc:auth-svc"
+command_background=true
+pidfile="/run/auth-svc.pid"
+
+depend() {
+	need net
+	after mediamtx
+}
+
+start_pre() {
+	if [ ! -f /etc/auth-svc/env ]; then
+		eerror "Missing /etc/auth-svc/env"
+		return 1
+	fi
+	checkpath -d -m 0755 -o auth-svc:auth-svc /var/lib/auth-svc
+}

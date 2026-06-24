@@ -18,11 +18,11 @@ import (
 )
 
 var (
-	passwordHash []byte
-	jwtSecret    []byte
-	mediamtxAPI  *url.URL
-	mediamtxHLS  *url.URL
-	hub          *ChatHub
+	passwordHash    []byte
+	jwtSecret       []byte
+	mediamtxAPI     *url.URL
+	mediamtxWebRTC  *url.URL
+	hub             *ChatHub
 )
 
 func main() {
@@ -38,11 +38,12 @@ func main() {
 
 	passwordHash = []byte(mustEnv("PASSWORD_HASH"))
 	jwtSecret = []byte(mustEnv("JWT_SECRET"))
+	loadMTXAuth()
 
 	var err error
 	mediamtxAPI, err = url.Parse(getEnv("MEDIAMTX_API", "http://127.0.0.1:9997"))
 	check(err)
-	mediamtxHLS, err = url.Parse(getEnv("MEDIAMTX_HLS", "http://127.0.0.1:8888"))
+	mediamtxWebRTC, err = url.Parse(getEnv("MEDIAMTX_WEBRTC", "http://127.0.0.1:8889"))
 	check(err)
 
 	hub = newChatHub()
@@ -55,10 +56,20 @@ func main() {
 	mux.Handle("GET /api/chat/history", requireAuth(http.HandlerFunc(hub.historyHandler)))
 	mux.HandleFunc("GET /api/chat/ws", hub.wsHandler)
 
+	// Dedicated localhost-only listener for MediaMTX's auth callback.
+	// No session cookie, no TLS — MediaMTX is a trusted local peer.
+	mtxAuthMux := http.NewServeMux()
+	mtxAuthMux.HandleFunc("POST /", handleMTXAuth)
+	mtxAuthAddr := getEnv("MEDIAMTX_AUTH_ADDR", "127.0.0.1:9998")
+	go func() {
+		log.Printf("mediamtx auth on %s", mtxAuthAddr)
+		log.Fatal(http.ListenAndServe(mtxAuthAddr, mtxAuthMux))
+	}()
+
 	apiProxy := &httputil.ReverseProxy{Director: mediamtxAPIDirector, ErrorHandler: proxyError}
-	hlsProxy := newHLSProxy()
+	whepProxy := newWHEPProxy()
 	mux.Handle("/api/mediamtx/", requireAuth(apiProxy))
-	mux.Handle("/live/", requireAuth(hlsProxy))
+	mux.Handle("/live/", requireAuth(whepProxy))
 	mux.Handle("/", spaHandler(distFSys()))
 
 	port := getEnv("PORT", "443")
@@ -75,7 +86,7 @@ func main() {
 		cm := &autocert.Manager{
 			Cache:      autocert.DirCache(certDir),
 			Prompt:     autocert.AcceptTOS,
-			HostPolicy: autocert.HostWhitelist("cup.larp.love"),
+			HostPolicy: autocert.HostWhitelist(getEnv("DOMAIN", "cup.larp.love")),
 		}
 
 		// :80 — Cloudflare-aware. With Cloudflare SSL = "Flexible", Cloudflare

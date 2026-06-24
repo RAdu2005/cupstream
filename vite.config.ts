@@ -14,15 +14,11 @@ export default defineConfig({
     host: true,
     proxy: {
       '/api': { target: 'http://localhost:9999', changeOrigin: true, ws: true },
-      // LL-HLS uses long-lived blocking playlist requests (30s+). Vite's
-      // default 30s proxy timeout cuts them off, so the player never
-      // receives segment updates.
-      '/live': {
-        target: 'http://localhost:9999',
-        changeOrigin: true,
-        timeout: 120_000,
-        proxyTimeout: 120_000,
-      },
+      // WHEP signaling: POST/PATCH/DELETE on /live/whep[/...] are proxied
+      // to auth-svc, which in turn forwards them to MediaMTX's WHEP
+      // listener. ICE-trickle PATCHes are short-lived here, so no extra
+      // timeout is needed.
+      '/live': { target: 'http://localhost:9999', changeOrigin: true },
     },
   },
   build: {

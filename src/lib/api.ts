@@ -46,8 +46,3 @@ export async function pathsList(): Promise<{
   const res = await fetch(`${API_BASE}/v3/paths/list`, { credentials: 'include' });
   return handle(res);
 }
-
-export async function hlsMuxersList(): Promise<{ items: Array<{ name: string; readers: Array<{ type: string; id: string }> }> }> {
-  const res = await fetch(`${API_BASE}/v3/hls/muxers/list`, { credentials: 'include' });
-  return handle(res);
-}

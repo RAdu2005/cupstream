@@ -23,15 +23,6 @@ export type PathsList = {
   items: PathItem[];
 };
 
-export type HLSMuxer = {
-  name: string;
-  path: string;
-  created: string;
-  lastRequest: string;
-  bytesSent: number;
-  readers: Array<{ type: string; id: string }>;
-};
-
 export type StreamMeta = {
   channel: {
     name: string;
