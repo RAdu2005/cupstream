@@ -1,0 +1,17 @@
+#!/sbin/openrc-run
+
+description="MediaMTX streaming server"
+
+command="/usr/local/bin/mediamtx"
+command_args="/etc/mediamtx/mediamtx.yml"
+command_user="mediamtx:mediamtx"
+command_background=true
+pidfile="/run/mediamtx.pid"
+
+depend() {
+	need net
+}
+
+start_pre() {
+	checkpath -d -m 0755 -o mediamtx:mediamtx /var/lib/mediamtx
+}

@@ -1,0 +1,18 @@
+services:
+  auth-svc:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    network_mode: host
+    restart: unless-stopped
+    depends_on:
+      - mediamtx
+
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    volumes:
+      - ./deploy/mediamtx.yml:/etc/mediamtx/mediamtx.yml:ro
+    network_mode: host
+    restart: unless-stopped

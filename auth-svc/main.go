@@ -86,7 +86,7 @@ func main() {
 		cm := &autocert.Manager{
 			Cache:      autocert.DirCache(certDir),
 			Prompt:     autocert.AcceptTOS,
-			HostPolicy: autocert.HostWhitelist("cup.larp.love"),
+			HostPolicy: autocert.HostWhitelist(getEnv("DOMAIN", "cup.larp.love")),
 		}
 
 		// :80 — Cloudflare-aware. With Cloudflare SSL = "Flexible", Cloudflare
