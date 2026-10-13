@@ -1,0 +1,24 @@
+#!/sbin/openrc-run
+
+description="CupStream server"
+
+command="/usr/local/bin/cupstream"
+command_user="cupstream:cupstream"
+command_background=true
+pidfile="/run/cupstream.pid"
+output_log="/var/log/cupstream.log"
+error_log="/var/log/cupstream.log"
+
+depend() {
+	need net
+	want mediamtx
+}
+
+start_pre() {
+	checkpath -d -m 0750 -o cupstream:cupstream /var/lib/cupstream
+	checkpath -f -m 0640 -o cupstream:cupstream /var/log/cupstream.log
+	set -a
+	[ -f /etc/cupstream/env ] && . /etc/cupstream/env
+	set +a
+	export CUPSTREAM_DB="${CUPSTREAM_DB:-/var/lib/cupstream/cupstream.db}"
+}

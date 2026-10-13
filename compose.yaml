@@ -1,0 +1,29 @@
+# Both services use the host network: MediaMTX needs the real interface
+# addresses for WebRTC, and its HTTP ports listen on 127.0.0.1 only.
+#
+#   docker compose up -d mediamtx     # development (scripts/dev.sh does this)
+#   docker compose up -d --build      # everything, e.g. for the CI smoke test
+
+services:
+  mediamtx:
+    build: deploy/mediamtx
+    image: cupstream-mediamtx:v1.21.2-cupstream.1
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      MTX_WEBRTCADDITIONALHOSTS: ${MTX_WEBRTCADDITIONALHOSTS:-}
+
+  cupstream:
+    build: .
+    image: cupstream:dev
+    network_mode: host
+    restart: unless-stopped
+    depends_on: [mediamtx]
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - cupstream-data:/data
+
+volumes:
+  cupstream-data:

@@ -1,0 +1,6 @@
+packages:
+  - path: github.com/RAdu2005/cupstream/server/internal/api
+    output_path: ../web/src/api/types.gen.ts
+    frontmatter: |
+      // Source: server/internal/api. Regenerate with `make generate`.
+      export type AuthProvider = 'dev' | 'google' | 'discord';

@@ -1,0 +1,110 @@
+// Package config loads the server configuration from CUPSTREAM_* environment
+// variables.
+package config
+
+import (
+	"errors"
+	"fmt"
+	"log/slog"
+	"net"
+	"net/url"
+	"os"
+	"strconv"
+	"strings"
+)
+
+type Config struct {
+	// Addr is the listen address of the public HTTP server.
+	Addr string
+	// PublicURL is the origin users open in the browser. It decides whether
+	// cookies are Secure and, later, the OAuth redirect URLs.
+	PublicURL *url.URL
+	// TLSCert and TLSKey, when both set, make the server speak HTTPS
+	// (a Cloudflare Origin CA certificate in production).
+	TLSCert, TLSKey string
+
+	DBPath string
+
+	MediaMTXAPI    *url.URL
+	MediaMTXWebRTC *url.URL
+
+	// DevLogin enables the passwordless development login. It is refused
+	// unless PublicURL is a local development host.
+	DevLogin bool
+
+	LogLevel  slog.Level
+	LogFormat string // "json" or "text"
+}
+
+// Load reads the configuration from the process environment.
+func Load() (*Config, error) { return load(os.Getenv) }
+
+func load(getenv func(string) string) (*Config, error) {
+	get := func(key, def string) string {
+		if v := getenv("CUPSTREAM_" + key); v != "" {
+			return v
+		}
+		return def
+	}
+	var errs []error
+	parseURL := func(key, def string) *url.URL {
+		raw := get(key, def)
+		u, err := url.Parse(raw)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			errs = append(errs, fmt.Errorf("CUPSTREAM_%s: %q is not an http(s) URL", key, raw))
+			return &url.URL{}
+		}
+		return u
+	}
+	parseBool := func(key string) bool {
+		raw := get(key, "false")
+		b, err := strconv.ParseBool(raw)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("CUPSTREAM_%s: %q is not a boolean", key, raw))
+		}
+		return b
+	}
+
+	c := &Config{
+		Addr:           get("ADDR", ":8080"),
+		PublicURL:      parseURL("PUBLIC_URL", "http://localhost:8080"),
+		TLSCert:        get("TLS_CERT", ""),
+		TLSKey:         get("TLS_KEY", ""),
+		DBPath:         get("DB", "data/cupstream.db"),
+		MediaMTXAPI:    parseURL("MEDIAMTX_API", "http://127.0.0.1:9997"),
+		MediaMTXWebRTC: parseURL("MEDIAMTX_WEBRTC", "http://127.0.0.1:8889"),
+		DevLogin:       parseBool("DEV_LOGIN"),
+		LogFormat:      get("LOG_FORMAT", "json"),
+	}
+
+	if err := c.LogLevel.UnmarshalText([]byte(get("LOG_LEVEL", "info"))); err != nil {
+		errs = append(errs, fmt.Errorf("CUPSTREAM_LOG_LEVEL: %w", err))
+	}
+	if c.LogFormat != "json" && c.LogFormat != "text" {
+		errs = append(errs, fmt.Errorf("CUPSTREAM_LOG_FORMAT: %q must be json or text", c.LogFormat))
+	}
+	if (c.TLSCert == "") != (c.TLSKey == "") {
+		errs = append(errs, errors.New("CUPSTREAM_TLS_CERT and CUPSTREAM_TLS_KEY must be set together"))
+	}
+	if c.DevLogin && c.PublicURL.Host != "" && !IsLocalHost(c.PublicURL.Hostname()) {
+		errs = append(errs, fmt.Errorf("CUPSTREAM_DEV_LOGIN is only allowed when CUPSTREAM_PUBLIC_URL is a local host, not %q", c.PublicURL.Hostname()))
+	}
+	if len(errs) > 0 {
+		return nil, errors.Join(errs...)
+	}
+	return c, nil
+}
+
+// SecureCookies reports whether cookies must carry the Secure attribute.
+func (c *Config) SecureCookies() bool { return c.PublicURL.Scheme == "https" }
+
+// IsLocalHost reports whether host (without port) is a local development host:
+// localhost, a loopback address, or a name ending in .localhost or .test.
+func IsLocalHost(host string) bool {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".test") {
+		return true
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && ip.IsLoopback()
+}

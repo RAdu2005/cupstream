@@ -1,38 +1,26 @@
-# syntax=docker/dockerfile:1
+# CupStream server: the Go binary with the website embedded.
 
-# ------------------------------------------------------------------
-# Stage 1: Build frontend
-# ------------------------------------------------------------------
-FROM node:20-bookworm-slim AS frontend-builder
-WORKDIR /app
-COPY package.json package-lock.json ./
+FROM node:24-alpine3.24 AS web
+WORKDIR /web
+COPY web/package.json web/package-lock.json ./
 RUN npm ci
-COPY . .
+COPY web/ ./
 RUN npm run build
 
-# ------------------------------------------------------------------
-# Stage 2: Build Go backend
-# ------------------------------------------------------------------
-FROM golang:1.22-bookworm AS backend-builder
-WORKDIR /app
-COPY auth-svc/go.mod auth-svc/go.sum ./
+FROM golang:1.27-alpine3.24 AS server
+WORKDIR /server
+COPY server/go.mod server/go.sum ./
 RUN go mod download
-COPY auth-svc/ ./
-COPY --from=frontend-builder /app/auth-svc/dist ./dist
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-    -ldflags="-s -w" -trimpath -o auth-svc .
+COPY server/ ./
+COPY --from=web /web/dist/ internal/webui/dist/
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /cupstream ./cmd/cupstream
 
-# ------------------------------------------------------------------
-# Stage 3: Runtime
-# ------------------------------------------------------------------
-FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY --from=backend-builder /app/auth-svc /usr/local/bin/auth-svc
-COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/auth-svc
-
-EXPOSE 80 443
-ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
-CMD ["/usr/local/bin/auth-svc"]
+FROM alpine:3.24
+RUN apk add --no-cache ca-certificates && adduser -D -H -u 10001 cupstream \
+    && mkdir /data && chown cupstream /data
+COPY --from=server /cupstream /usr/local/bin/cupstream
+USER cupstream
+ENV CUPSTREAM_DB=/data/cupstream.db
+VOLUME /data
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/cupstream"]

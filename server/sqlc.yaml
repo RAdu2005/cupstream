@@ -1,0 +1,17 @@
+version: "2"
+sql:
+  - engine: sqlite
+    schema: internal/store/migrations
+    queries: internal/store/queries
+    gen:
+      go:
+        package: store
+        out: internal/store
+        output_db_file_name: db.gen.go
+        output_models_file_name: models.gen.go
+        output_files_suffix: .gen
+        emit_empty_slices: true
+overrides:
+  go:
+    rename:
+      avatar_url: AvatarURL

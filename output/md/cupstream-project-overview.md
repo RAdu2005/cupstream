@@ -72,7 +72,11 @@ Everything runs on one dedicated server: an AMD Ryzen 9 9950X3D (16 cores) with 
 
 ### 3.2 MediaMTX build: pausing viewer sessions
 
-MediaMTX is built from a pinned release plus our patch, which starts from the open pull request [bluenviron/mediamtx#6308](https://github.com/bluenviron/mediamtx/pull/6308) ("allow pausing and resuming WHEP sessions"). That PR stops sending media to one viewer while keeping the WebRTC connection alive; on resume, video waits for the next keyframe and RTP sequence numbers stay continuous. We review and test the code ourselves, and the following changes are made in our MediaMTX build, not in CupStream's Go server:
+MediaMTX is built from a pinned release plus our patch, which starts from the open pull request [bluenviron/mediamtx#6308](https://github.com/bluenviron/mediamtx/pull/6308) ("allow pausing and resuming WHEP sessions"). That PR stops sending media to one viewer while keeping the WebRTC connection alive; on resume, video waits for the next keyframe and RTP sequence numbers stay continuous. We review and test the code ourselves, and the following changes are made in our MediaMTX build, not in CupStream's Go server.
+
+The build lives in a fork, [RAdu2005/mediamtx](https://github.com/RAdu2005/mediamtx). Each branch `cupstream/<release>` starts from an upstream release tag, adds the PR's commit unchanged, then our changes as separate commits, and is tagged `<release>-cupstream.<n>` (currently `v1.21.2-cupstream.1`, the PR only). CupStream's MediaMTX image is built from that tag, so development, CI and production run the same binary. Our changes are offered upstream as comments on the PR or as follow-up PRs.
+
+The changes:
 
 1. **Keyframe request on resume.** Resuming asks the stream's source for a keyframe straight away (a PLI to WebRTC publishers), limited to one request per stream every 300 ms so a burst of resumes shares one keyframe. RTMP and SRT sources cannot be asked and keep their own keyframe interval.
 2. **Control through the localhost API only.** New endpoints `POST /v3/webrtcsessions/pause/{id}` and `/resume/{id}`, a configuration flag that disables the public JSON `PATCH`, and the session ID returned in a response header of the WHEP `POST` so Go can map sessions to viewers.
@@ -296,7 +300,7 @@ Access to Discord rooms is never stored: it is calculated from the bot's in-memo
 
 ### 9.4 Deployment and operations
 
-- Docker Compose runs the Go server and MediaMTX, as today; the systemd and OpenRC service files remain as alternatives.
+- Docker Compose runs the Go server and MediaMTX (built from the pinned fork tag, see 3.2); the systemd and OpenRC service files remain as alternatives.
 - SQLite is backed up continuously with Litestream to S3-compatible storage.
 - Structured logs (slog), a health endpoint, and an admin page that shows live streams, viewers and bandwidth.
 - Repository layout: `server/` (the renamed `auth-svc`), `web/`, `companion/`, `deploy/` and `docs/`. TypeScript types are generated from the Go API types, so the website and the desktop app share them.
@@ -317,19 +321,19 @@ The phases are ordered so that each one ends with something usable and testable.
 <!-- widths: 17,50,33 -->
 | Phase | Work | Done when |
 |---|---|---|
-| 0. Groundwork | Restructure the repository, upgrade Go, structured logging and configuration, SQLite with goose, sqlc and Litestream, a development setup with a pinned MediaMTX and the development login, CI for Go and the website, Cloudflare Full (strict), MediaMTX restricted to localhost | CI passes on the new layout and the development environment starts with one command |
+| 0. Groundwork | Restructure the repository, upgrade Go, structured logging and configuration, SQLite with goose and sqlc, the MediaMTX fork with PR #6308 built and pinned (3.2), MediaMTX restricted to localhost, a development setup with the development login, CI for Go, the website and the MediaMTX image | CI passes on the new layout and the development environment starts with one command |
 | 1. Identity | Google and Discord sign-in, accounts, sessions, handles, account linking, Discord server-list sync, settings page; remove the shared-password login | A user can sign in with either provider and link the other |
 | 2. Rooms and media gateway | Room types, access checks with the test table, WHIP and WHEP gateway with session tracking, live-state reconciliation, OBS stream keys, start mode and the one-live-stream rule | Two OBS instances stream into one link room; an allowed browser watches both, others are refused |
-| MediaMTX build | Review and test PR #6308, apply changes 1–9 from 3.2 with their tests, build and pin our MediaMTX image, Go pause/resume through the API with the fallback to closing sessions | A paused viewer resumes in under a second on a WebRTC stream, a browser cannot resume itself, and a forgotten paused session closes after the timeout |
+| MediaMTX build | Review PR #6308, apply changes 1–9 from 3.2 with their tests and tag a new fork release, Go pause/resume through the API behind the session interface from phase 2, with the fallback to closing sessions | A paused viewer resumes in under a second on a WebRTC stream, a browser cannot resume itself, and a forgotten paused session closes after the timeout |
 | Desktop prototype | A command-line pipeline on Windows and Linux: capture, hardware encoding, WHIP and audio without Discord | Both operating systems publish to the development server with Discord excluded |
 | 3. Realtime | WebSocket gateway, presence, stream events, chat with expiry and moderation, viewer statistics | Two browsers see each other's presence and chat; messages disappear after 24 hours |
 | 4. Viewer interface | Home page, room page with focus and grid layouts and several streams, pre-warmed paused sessions, pausing background tiles and hidden tabs, invites, allowed list, bans, thumbnails, bandwidth warnings | A viewer watches several streams and is warned when their connection cannot keep up |
 | 5. Browser streaming | Go-live dialog, capture, presets, compatibility warnings, audio device picker, bitrate control, reconnection | A user goes live from Chrome and from Firefox and sees the correct warnings |
 | 6. Discord | Bot, voice tracking, Discord rooms, Video permission, pausing viewers who leave voice, grace periods, status messages, server settings, moving streams to link rooms, friends with requests and suggestions | People in a voice channel can watch a stream there; leaving the channel pauses their media within 2 seconds and rejoining resumes it |
 | 7. Desktop app | Tauri app, tray, sign-in, picker, encoders, audio modes, low-quality version, bitrate control, installers and updates | A user installs the app on Windows or Linux and goes live in two clicks |
-| 8. Hardening | Admission control (pausing background sessions first), on-demand low-quality versions, TURN, load test, admin page, privacy pages | The server refuses viewers cleanly at capacity and passes the load test |
+| 8. Hardening and launch | Admission control (pausing background sessions first), on-demand low-quality versions, TURN, load test, admin page, privacy pages; first production deployment with Litestream backups and Cloudflare Full (strict) | The server refuses viewers cleanly at capacity and passes the load test |
 
-Browser streaming comes before the desktop app because it is a fraction of the work and gives a complete end-to-end loop for testing; the interface still promotes the desktop app once it exists. The MediaMTX build comes right after phase 2 because the gateway, the viewer interface and Discord rooms all use pausing. The desktop prototype follows it, because GStreamer, platform capture and packaging are the largest technical risks.
+Browser streaming comes before the desktop app because it is a fraction of the work and gives a complete end-to-end loop for testing; the interface still promotes the desktop app once it exists. Nothing is deployed before phase 8, so backups and the Cloudflare change wait for the first production deployment. The fork itself is set up in phase 0, so every phase runs on the same MediaMTX binary and problems in the PR show up early. Our changes to it come right after phase 2: phase 2 builds session tracking with closing only, which is also the permanent fallback, and the viewer interface (phase 4), Discord rooms (phase 6) and admission control (phase 8) are the first features that need pausing. The desktop prototype follows it, because GStreamer, platform capture and packaging are the largest technical risks.
 
 ## 12. Risks and open points
 
@@ -340,7 +344,7 @@ Browser streaming comes before the desktop app because it is a fraction of the w
 | Audio without Discord needs Windows 11 | Windows 10 users capture all system audio | A warning; possibly a custom capture element later, since OBS uses the same API on Windows 10 2004 and later |
 | Fedora lacks hardware H.264 encoding by default | Higher CPU use, or AV1 only | Encoder detection, AV1, OpenH264 and an RPM Fusion guide |
 | Unsigned Windows app | SmartScreen warning and possible antivirus false positives | Download-page guidance, checksums and false-positive reports |
-| MediaMTX details (simulcast, ending a viewer's session from Go) are unverified | Parts of the design may change | Verify early in phase 2 |
+| MediaMTX simulcast support is unverified | OBS simulcast and multiple qualities per stream may not work | Verify in phase 2; until then each quality is a separate stream. Ending a viewer's session is solved: Go proxies the WHEP `POST`, so it knows the session URL and can send it a `DELETE` |
 | Pausing depends on our own MediaMTX build, based on an unmerged PR | Upgrades need a rebase; upstream may merge a different design | Small patch on a pinned release, our own tests, and a Go fallback to closing sessions |
 | Resuming an OBS (RTMP/SRT) stream waits for its keyframe interval | Slower resume for OBS streams | Recommend a 1–2 second keyframe interval in the OBS guide |
 | No server-side transcoding by default | Viewers on slow connections may stall | Bandwidth warnings, the app's low-quality version and on-demand transcodes |

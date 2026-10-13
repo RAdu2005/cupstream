@@ -1,0 +1,25 @@
+[Unit]
+Description=CupStream server
+After=network.target mediamtx.service
+Wants=mediamtx.service
+
+[Service]
+Type=simple
+User=cupstream
+Group=cupstream
+EnvironmentFile=/etc/cupstream/env
+Environment=CUPSTREAM_DB=/var/lib/cupstream/cupstream.db
+ExecStart=/usr/local/bin/cupstream
+Restart=on-failure
+RestartSec=2
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+StateDirectory=cupstream
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target

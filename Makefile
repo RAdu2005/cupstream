@@ -1,43 +1,45 @@
-.PHONY: help dev-frontend dev-backend build deploy clean setup-env install docker-up docker-down
+# Tool versions are pinned in mise.toml; commands run through `mise x` when
+# mise is installed, so the shell does not need mise activated.
+MISE := $(shell command -v mise >/dev/null 2>&1 && echo "mise x --")
+GO_TOOL := $(MISE) go tool -modfile=tools/go.mod
+
+.PHONY: help dev build test test-server test-web generate check-generated images clean
 
 help:
-	@echo "Targets:"
-	@echo "  make dev-frontend   Run Vite dev server (HMR)"
-	@echo "  make dev-backend    Run Go backend in dev mode (no TLS, no embed)"
-	@echo "  make build          Build the production single-binary (npm + go with embed)"
-	@echo "  make deploy         Build and rsync to VPS (set VPS=user@host)"
-	@echo "  make setup-env      Generate .env via interactive prompt"
-	@echo "  make install        Run native install script (requires .env)"
-	@echo "  make docker-up      Start services with docker compose"
-	@echo "  make docker-down    Stop docker compose services"
-	@echo "  make clean          Remove build artifacts"
+	@echo "make dev               MediaMTX (Docker) + Go server + Vite on http://localhost:5173"
+	@echo "make build             bin/cupstream with the website embedded"
+	@echo "make test              Go and website tests"
+	@echo "make generate          sqlc queries and TypeScript API types"
+	@echo "make check-generated   fail if generated code is out of date"
+	@echo "make images            build the cupstream and MediaMTX Docker images"
 
-dev-frontend:
-	npm run dev
-
-dev-backend:
-	cd auth-svc && TLS=no PORT=9999 go run -tags dev .
+dev:
+	$(MISE) scripts/dev.sh
 
 build:
-	npm run build
-	cd auth-svc && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -trimpath -o auth-svc .
+	cd web && $(MISE) npm ci && $(MISE) npm run build
+	find server/internal/webui/dist -mindepth 1 ! -name .gitkeep -delete
+	cp -r web/dist/. server/internal/webui/dist/
+	cd server && CGO_ENABLED=0 $(MISE) go build -trimpath -ldflags="-s -w" -o ../bin/cupstream ./cmd/cupstream
 
-deploy: build
-	@if [ -z "$$VPS" ]; then echo "Set VPS=user@host"; exit 1; fi
-	rsync -avz auth-svc/auth-svc $$VPS:/tmp/auth-svc.new
-	ssh $$VPS 'sudo install -m 0755 /tmp/auth-svc.new /usr/local/bin/auth-svc && sudo systemctl restart auth-svc && rm /tmp/auth-svc.new'
+test: test-server test-web
 
-setup-env:
-	bash scripts/setup-env.sh
+test-server:
+	cd server && $(MISE) go vet ./... && $(MISE) go test -race ./...
 
-install:
-	bash scripts/install.sh
+test-web:
+	cd web && $(MISE) npm run typecheck && $(MISE) npm test
 
-docker-up:
-	docker compose up --build -d
+generate:
+	cd server && $(MISE) sqlc generate && $(GO_TOOL) tygo generate
 
-docker-down:
-	docker compose down
+check-generated: generate
+	cd server && $(MISE) sqlc vet
+	git diff --exit-code -- server/internal/store web/src/api/types.gen.ts
+
+images:
+	docker compose build
 
 clean:
-	rm -rf dist auth-svc/dist auth-svc/auth-svc
+	rm -rf bin web/dist
+	find server/internal/webui/dist -mindepth 1 ! -name .gitkeep -delete

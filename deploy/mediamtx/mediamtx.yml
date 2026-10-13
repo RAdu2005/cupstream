@@ -1,0 +1,45 @@
+# MediaMTX configuration for CupStream. Settings not listed keep MediaMTX's
+# defaults. Values can be overridden with MTX_* environment variables, e.g.
+# MTX_WEBRTCADDITIONALHOSTS=203.0.113.10 for the server's public IP.
+#
+# Only the CupStream server talks to MediaMTX over HTTP, on localhost: it is
+# the single place that decides who may publish and watch. Media packets
+# travel directly between clients and port 8189 (UDP, TCP fallback).
+
+logLevel: info
+
+# Every HTTP request (WHIP, WHEP, API) must come from this machine.
+authMethod: internal
+authInternalUsers:
+  - user: any
+    ips: ['127.0.0.1/32', '::1/128']
+    permissions:
+      - action: publish
+      - action: read
+      - action: api
+
+api: true
+apiAddress: 127.0.0.1:9997
+
+webrtc: true
+webrtcAddress: 127.0.0.1:8889
+webrtcAllowOrigins: []
+webrtcLocalUDPAddress: :8189
+webrtcLocalTCPAddress: :8189
+webrtcIPsFromInterfaces: true
+webrtcAdditionalHosts: []
+webrtcICEServers2: []
+
+# CupStream is WebRTC-only.
+rtsp: false
+rtmp: false
+hls: false
+srt: false
+moq: false
+playback: false
+metrics: false
+pprof: false
+
+paths:
+  # Stream paths (s/<streamId>) are created by publishing to them.
+  all_others:
