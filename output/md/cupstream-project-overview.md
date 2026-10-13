@@ -49,7 +49,7 @@ CupStream will let people go live from a desktop app, a browser or OBS, and watc
 
 ![Planned architecture](images/planned-architecture.png)
 
-The Go server is the only public entry point for HTTP and WebSocket traffic. It handles sign-in, rooms, friends, the realtime WebSocket (chat, presence and stream events), the Discord bot and all WHIP/WHEP signaling, and stores its data in SQLite. MediaMTX only forwards media. Its HTTP interface listens on localhost only, so every publish and playback request has to pass Go's access checks. Media packets travel directly between clients and MediaMTX over UDP, with a TCP fallback, on port 8189.
+The Go server is the only public entry point for HTTP and WebSocket traffic. It handles sign-in, rooms, friends, the realtime WebSocket (chat, presence and stream events), the Discord bot and all WHIP/WHEP signaling, and stores its data in SQLite. MediaMTX only forwards media. It runs from our own build, which adds pausing and resuming of viewer sessions (see 3.2). Its HTTP interface listens on localhost only, so every publish and playback request has to pass Go's access checks. Media packets travel directly between clients and MediaMTX over UDP, with a TCP fallback, on port 8189.
 
 Everything runs on one dedicated server: an AMD Ryzen 9 9950X3D (16 cores) with 128 GB of RAM, running Ubuntu Server 24.04, with a guaranteed, unmetered 1 Gbps connection. The network, not the CPU, is the capacity limit (see 9.3).
 
@@ -68,6 +68,32 @@ Everything runs on one dedicated server: an AMD Ryzen 9 9950X3D (16 cores) with 
 | Codecs | H.264 without B-frames by default, AV1 optional, HEVC refused; Opus audio. | Without transcoding, every viewer must be able to decode what the sender sends. |
 | Desktop app | Tauri 2 (Rust) with GStreamer through gstreamer-rs; WHIP through the Rust `whipclientsink` element built into the app. | Hardware encoders and per-application audio capture; the settings UI can reuse the website's React components. |
 | Transcoding | None by default; optional on-demand low-quality versions through MediaMTX's `runOnDemand` and FFmpeg. | Forwarding keeps latency minimal, and the server's CPU allows a few transcodes when viewers need them. |
+| Pausing viewers | Our MediaMTX build can pause and resume a viewer's session without closing it (3.2). | Media to a viewer can stop instantly and resume in a fraction of a second, without a new connection. |
+
+### 3.2 MediaMTX build: pausing viewer sessions
+
+MediaMTX is built from a pinned release plus our patch, which starts from the open pull request [bluenviron/mediamtx#6308](https://github.com/bluenviron/mediamtx/pull/6308) ("allow pausing and resuming WHEP sessions"). That PR stops sending media to one viewer while keeping the WebRTC connection alive; on resume, video waits for the next keyframe and RTP sequence numbers stay continuous. We review and test the code ourselves, and the following changes are made in our MediaMTX build, not in CupStream's Go server:
+
+1. **Keyframe request on resume.** Resuming asks the stream's source for a keyframe straight away (a PLI to WebRTC publishers), limited to one request per stream every 300 ms so a burst of resumes shares one keyframe. RTMP and SRT sources cannot be asked and keep their own keyframe interval.
+2. **Control through the localhost API only.** New endpoints `POST /v3/webrtcsessions/pause/{id}` and `/resume/{id}`, a configuration flag that disables the public JSON `PATCH`, and the session ID returned in a response header of the WHEP `POST` so Go can map sessions to viewers.
+3. **No hanging requests.** A pause request that arrives before the connection exists is stored and applied once it does, or answered with 409, instead of blocking until the session ends.
+4. **Paused timeout.** A session that stays paused longer than a configurable time (`webrtcPausedTimeout`, 2 minutes by default) is closed, in case Go never sends its `DELETE`.
+5. **Paused state in the API.** `/v3/webrtcsessions` reports `paused` and `pausedSince`, so Go can rebuild its view after a restart.
+6. **Per-track pause.** The request can pause video and audio separately, for example `{"video": false, "audio": true}`.
+7. **Start paused without a preview frame.** `?paused=true&preview=false` opens a session that sends nothing until resumed, so pre-warming a room does not cost a burst of keyframes.
+8. **Lock-free fast path.** The per-packet check uses an atomic flag; the mutex is only taken when the state changes.
+9. **Keyframe retry.** If no keyframe arrives within about 2 seconds of a resume, the request is repeated and logged.
+
+The patch also gets tests for the Opus, VP8/VP9 and AV1 paths, pausing before the connection is up, rapid pause/resume toggling under `-race`, resuming on a stream with a long keyframe interval, and a throughput comparison with and without the patch. It is kept small and rebased onto each MediaMTX release we upgrade to. Go checks at startup whether the build supports pausing and otherwise falls back to closing sessions, so the fork can be dropped if upstream merges a different design.
+
+**Where CupStream uses it:**
+
+- **Leaving a Discord voice channel:** the viewer's media is paused 1–2 seconds after they leave and the session is closed after 2 minutes; rejoining within that time resumes it (see 4.3).
+- **Background tiles:** streams that are not in focus can be paused and resumed almost instantly, which is also the main action of the bandwidth warning (7.2).
+- **Pre-warmed rooms:** every stream in a room is opened paused, so switching streams only waits for a keyframe (7.1).
+- **Hidden tabs:** muted tiles are paused and the focused stream drops to audio only while the tab is hidden (7.1).
+- **Capacity:** near the bandwidth limit, background and hidden-tab sessions are paused before new viewers are refused (9.3).
+- **Moving a stream to a link room:** viewers who were not ticked are paused instead of disconnected, so the owner can let them back in instantly (4.4).
 
 ## 4. Rooms and access control
 
@@ -79,7 +105,7 @@ Everything runs on one dedicated server: an AMD Ryzen 9 9950X3D (16 cores) with 
 | Owner | The Discord server; one room per voice channel | A user; every user has exactly one link room |
 | Who can watch | People currently in the voice channel who are signed in with Discord | Depends on visibility: everyone (no login), signed-in users, or invite only |
 | Who can stream | Members with Discord's Video permission in the channel (default), or anyone in the channel (server setting) | The owner and the people they allowed to stream |
-| Leaving voice | Viewers lose access and streams end after a 10–15 second grace period | No effect |
+| Leaving voice | Viewers' media pauses after 1–2 seconds and their session closes after 2 minutes; streams end after a 10–15 second grace period | No effect |
 | Moderation | Based on Discord permissions | The owner |
 | Discord bot | Required; posts and updates a status message in the voice channel's text chat | Not involved |
 | Conversion | A streamer can move their own stream to their link room | Cannot become a Discord room |
@@ -98,9 +124,10 @@ Each room type has exactly one source of truth for permissions, Discord or CupSt
 - **Watching:** being in the voice channel and signed in with Discord is the only way in. Someone who opens the room's link without being in the channel is asked to join it, with a link that opens the channel in Discord. Server and channel names are only shown to members of that server.
 - **Streaming:** by default the bot mirrors Discord's own rule: only members with the Video (Go Live) permission in the channel can stream. The bot calculates this from roles and channel permission overrides, which it receives without privileged intents. Server admins can instead allow anyone in the channel. If someone loses the permission while live, their stream ends after the grace period.
 - **Moderation:** members with Move Members in the channel can end someone else's stream, and members with Manage Messages can delete chat messages. A viewer is removed by disconnecting them from voice in Discord; the grace-period rule does the rest.
-- **Leaving voice:** viewers lose access and streams end 10–15 seconds after leaving or switching channels; rejoining within that time cancels it. A streamer sees a countdown with a *Move to my link room* button (see 4.4).
+- **Leaving voice (viewers):** 1–2 seconds after a viewer leaves or switches channels, their media is paused (3.2), so they stop receiving the stream almost immediately; the short delay only absorbs quick leave-and-rejoin flaps. If they rejoin within 2 minutes, the session resumes without a new connection; otherwise it is closed.
+- **Leaving voice (streamers):** publishing sessions cannot be paused, so a streamer's stream ends 10–15 seconds after they leave; rejoining within that time cancels it. The streamer sees a countdown with a *Move to my link room* button (see 4.4).
 - **Status message:** the bot posts one message in the voice channel's text chat that lists the live streams and links to the room. It edits the message as streams start and stop (at most once every few seconds, because of Discord's rate limits) and deletes it when the room goes idle.
-- **Reliability:** if the bot loses its connection to Discord, all kicks and stream endings pause until its voice state is up to date again, so a bot restart never ends anyone's stream. Removing the bot from a server or deleting the voice channel ends that room's streams with a clear reason.
+- **Reliability:** if the bot loses its connection to Discord, all pauses, kicks and stream endings wait until its voice state is up to date again, so a bot restart never ends anyone's stream. Removing the bot from a server or deleting the voice channel ends that room's streams with a clear reason.
 - **Chat:** Discord rooms use the same CupStream chat, collapsed by default. It is not mirrored to Discord, because reading Discord messages requires the privileged Message Content intent.
 
 ### 4.4 Going live and moving streams
@@ -108,7 +135,7 @@ Each room type has exactly one source of truth for permissions, Discord or CupSt
 - **One live stream per user:** a user can only be live in one place. Going live elsewhere asks for confirmation to end the current stream first. OBS cannot show a prompt, so it is refused and the question appears on the website or in the desktop app instead. A sender reconnecting its own dropped stream does not count as a second stream.
 - **Start mode:** a user setting decides where a new stream goes. With *Discord (auto)*, it goes to a Discord room when the user is in a voice channel on a server with the bot and may stream there; otherwise the user is told why and offered their link room. With *Link room*, it always goes to the user's link room.
 - **Moving a stream to a link room:** a streamer can move their own stream from a Discord room into their link room, for example to keep streaming after leaving voice, or by choosing *Open to everyone*. The stream keeps its media path, so the video is not interrupted, and the chat history stays with the Discord room.
-- **Who keeps watching after a move:** the link room keeps its visibility, or switches to *Everyone*. If it is invite only, people on the allowed list keep watching. The dialog lists the other current viewers with checkboxes, ticked by default; ticked viewers get temporary access until the stream ends, and nothing is saved unless the owner chooses *Always allow*.
+- **Who keeps watching after a move:** the link room keeps its visibility, or switches to *Everyone*. If it is invite only, people on the allowed list keep watching. The dialog lists the other current viewers with checkboxes, ticked by default; ticked viewers get temporary access until the stream ends, and nothing is saved unless the owner chooses *Always allow*. Unticked viewers are paused rather than disconnected, so the owner can still let them in without them reconnecting; their sessions close after the paused timeout.
 - **No move in the other direction:** to stream in a Discord room, the user ends the stream, joins a voice channel on a server with the bot and goes live again.
 
 ## 5. Accounts, friends and Discord integration
@@ -196,13 +223,15 @@ The browser's screen capture (`getDisplayMedia`) is published over WHIP. It need
 
 - Members with presence and live badges, and a card with a thumbnail for each live stream. Clicking a card starts playback, which also satisfies browsers' autoplay rules for sound; each watched stream is one WHEP connection.
 - Focus and grid layouts, volume per stream (only the focused stream is unmuted by default), fullscreen and the chat panel.
-- Initial limits: eight live streams per room and four watched streams per viewer.
+- **Pre-warming:** when a viewer opens a room, the page opens a paused session for every live stream (without a preview frame, see 3.2). Switching to a stream only resumes it, so the picture appears as soon as the keyframe arrives.
+- **Background tiles and hidden tabs:** streams that are not in focus can be paused and resumed almost instantly. While the tab is hidden, muted tiles are paused and the focused stream drops to audio only.
+- Initial limits: eight live streams per room and four watched (unpaused) streams per viewer.
 - Viewing works on phones, since WebRTC with H.264 is supported on iOS and Android; the layout is responsive.
 
 ### 7.2 Bandwidth warnings
 
 - **Before opening another stream:** the server sends each stream's current bitrate over the WebSocket. The first time a viewer watches more than one stream, the page measures their connection with a short download test against the server, then refines the estimate from the throughput they actually sustain. If the total would exceed about 80% of their capacity, they are warned before the stream opens. The browser's own estimate cannot be used: Chrome caps it at 10 Mbps, and Firefox and Safari do not provide it.
-- **While watching:** every two seconds the player reads the WebRTC statistics of each stream: packet loss, freezes and dropped frames. If all streams get worse together, the viewer's connection is the bottleneck, and a banner suggests closing a stream, pausing background streams or switching to a low-quality version. If only one stream gets worse, the problem is that streamer's connection, so the stream shows a badge instead; the server can confirm this from its incoming statistics.
+- **While watching:** every two seconds the player reads the WebRTC statistics of each stream: packet loss, freezes and dropped frames. If all streams get worse together, the viewer's connection is the bottleneck, and a banner suggests pausing background streams (which resume almost instantly), closing a stream or switching to a low-quality version. If only one stream gets worse, the problem is that streamer's connection, so the stream shows a badge instead; the server can confirm this from its incoming statistics.
 
 ### 7.3 Quality adaptation
 
@@ -248,7 +277,8 @@ Access to Discord rooms is never stored: it is calculated from the bot's in-memo
 - The session cookie is HttpOnly, Secure and SameSite=Lax. State-changing requests and WebSocket connections check the Origin header, which also fixes the current chat WebSocket that accepts connections from any website.
 - OAuth uses the state parameter, PKCE where the provider supports it and a nonce for Google, with minimal scopes. Google tokens are not stored.
 - Stream keys, invite tokens and session tokens are 128-bit random values stored as SHA-256 hashes.
-- MediaMTX's HTTP and API ports listen on localhost only, and the firewall opens only TCP 80 and 443 and UDP/TCP 8189. The MediaMTX version is pinned instead of using `latest`.
+- MediaMTX's HTTP and API ports listen on localhost only, and the firewall opens only TCP 80 and 443 and UDP/TCP 8189. MediaMTX runs from our pinned build instead of `latest`.
+- Pausing is not an access control by itself: anyone holding a session URL could resume it. Pause and resume are therefore only available through MediaMTX's localhost API, the public JSON `PATCH` is disabled, and Go forwards only trickle-ICE `PATCH` requests from browsers.
 - Cloudflare moves from Flexible SSL, which sends traffic unencrypted between Cloudflare and the server, to Full (strict) with a Cloudflare Origin CA certificate. ICE candidates must contain the server's real IP address, because Cloudflare cannot carry UDP. WebSockets send a ping every 30 seconds, because Cloudflare closes idle connections after about 100 seconds.
 - Rate limits on sign-in, chat and stream creation, security headers including a Content Security Policy, and an admin kill switch to end any stream or ban a user.
 
@@ -260,7 +290,7 @@ Access to Discord rooms is never stored: it is calculated from the bot's in-memo
 
 ### 9.3 Capacity
 
-- 1 Gbps carries about 125 viewer-streams at 8 Mbps (1080p60) or about 40 at 25 Mbps (4K60). Above roughly 800 Mbps of outgoing traffic, measured on the network interface, new viewers are refused with a clear message.
+- 1 Gbps carries about 125 viewer-streams at 8 Mbps (1080p60) or about 40 at 25 Mbps (4K60). Near roughly 800 Mbps of outgoing traffic, measured on the network interface, background and hidden-tab sessions are paused first; if that is not enough, new viewers are refused with a clear message.
 - The CPU is not the limit for forwarding encrypted media. Linux UDP buffer sizes are raised for high packet rates.
 - A TURN server (coturn on port 443) can be added later for networks that block UDP and port 8189.
 
@@ -274,7 +304,8 @@ Access to Discord rooms is never stored: it is calculated from the bot's in-memo
 ## 10. Testing
 
 - **Go:** a table of access-control cases (room type, visibility, allowed list, temporary access, voice presence, permissions, and the action: watch, stream, chat or moderate), store tests on a temporary SQLite database, OAuth callbacks against a mock provider, and the bot's voice tracking with synthetic Discord events.
-- **Media in CI:** MediaMTX in a container, a GStreamer test source publishing over WHIP, and headless Chromium (Playwright) playing over WHEP, checking that frames are decoded.
+- **MediaMTX build:** the pause patch's own tests (see 3.2), plus CupStream integration tests that pause, resume and time out sessions through the API and check that a browser cannot resume a session itself.
+- **Media in CI:** our MediaMTX build in a container, a GStreamer test source publishing over WHIP, and headless Chromium (Playwright) playing over WHEP, checking that frames are decoded.
 - **Website:** Vitest for components, and Playwright end-to-end tests with a development-only login provider (enabled by an environment variable, on localhost only), since OAuth-only sign-in cannot be automated otherwise.
 - **Desktop app:** CI builds for Windows and Linux, pipeline smoke tests with test sources, and a manual test matrix of GPU vendor, operating system and X11/Wayland.
 - **Load test:** synthetic WHEP viewers to find where the server saturates.
@@ -289,15 +320,16 @@ The phases are ordered so that each one ends with something usable and testable.
 | 0. Groundwork | Restructure the repository, upgrade Go, structured logging and configuration, SQLite with goose, sqlc and Litestream, a development setup with a pinned MediaMTX and the development login, CI for Go and the website, Cloudflare Full (strict), MediaMTX restricted to localhost | CI passes on the new layout and the development environment starts with one command |
 | 1. Identity | Google and Discord sign-in, accounts, sessions, handles, account linking, Discord server-list sync, settings page; remove the shared-password login | A user can sign in with either provider and link the other |
 | 2. Rooms and media gateway | Room types, access checks with the test table, WHIP and WHEP gateway with session tracking, live-state reconciliation, OBS stream keys, start mode and the one-live-stream rule | Two OBS instances stream into one link room; an allowed browser watches both, others are refused |
+| MediaMTX build | Review and test PR #6308, apply changes 1–9 from 3.2 with their tests, build and pin our MediaMTX image, Go pause/resume through the API with the fallback to closing sessions | A paused viewer resumes in under a second on a WebRTC stream, a browser cannot resume itself, and a forgotten paused session closes after the timeout |
 | Desktop prototype | A command-line pipeline on Windows and Linux: capture, hardware encoding, WHIP and audio without Discord | Both operating systems publish to the development server with Discord excluded |
 | 3. Realtime | WebSocket gateway, presence, stream events, chat with expiry and moderation, viewer statistics | Two browsers see each other's presence and chat; messages disappear after 24 hours |
-| 4. Viewer interface | Home page, room page with focus and grid layouts and several streams, invites, allowed list, bans, thumbnails, bandwidth warnings | A viewer watches several streams and is warned when their connection cannot keep up |
+| 4. Viewer interface | Home page, room page with focus and grid layouts and several streams, pre-warmed paused sessions, pausing background tiles and hidden tabs, invites, allowed list, bans, thumbnails, bandwidth warnings | A viewer watches several streams and is warned when their connection cannot keep up |
 | 5. Browser streaming | Go-live dialog, capture, presets, compatibility warnings, audio device picker, bitrate control, reconnection | A user goes live from Chrome and from Firefox and sees the correct warnings |
-| 6. Discord | Bot, voice tracking, Discord rooms, Video permission, grace periods, status messages, server settings, moving streams to link rooms, friends with requests and suggestions | People in a voice channel can watch a stream there, and leaving the channel removes access after 10–15 seconds |
+| 6. Discord | Bot, voice tracking, Discord rooms, Video permission, pausing viewers who leave voice, grace periods, status messages, server settings, moving streams to link rooms, friends with requests and suggestions | People in a voice channel can watch a stream there; leaving the channel pauses their media within 2 seconds and rejoining resumes it |
 | 7. Desktop app | Tauri app, tray, sign-in, picker, encoders, audio modes, low-quality version, bitrate control, installers and updates | A user installs the app on Windows or Linux and goes live in two clicks |
-| 8. Hardening | Admission control, on-demand low-quality versions, TURN, load test, admin page, privacy pages | The server refuses viewers cleanly at capacity and passes the load test |
+| 8. Hardening | Admission control (pausing background sessions first), on-demand low-quality versions, TURN, load test, admin page, privacy pages | The server refuses viewers cleanly at capacity and passes the load test |
 
-Browser streaming comes before the desktop app because it is a fraction of the work and gives a complete end-to-end loop for testing; the interface still promotes the desktop app once it exists. The desktop prototype runs right after phase 2 because GStreamer, platform capture and packaging are the largest technical risks.
+Browser streaming comes before the desktop app because it is a fraction of the work and gives a complete end-to-end loop for testing; the interface still promotes the desktop app once it exists. The MediaMTX build comes right after phase 2 because the gateway, the viewer interface and Discord rooms all use pausing. The desktop prototype follows it, because GStreamer, platform capture and packaging are the largest technical risks.
 
 ## 12. Risks and open points
 
@@ -309,9 +341,11 @@ Browser streaming comes before the desktop app because it is a fraction of the w
 | Fedora lacks hardware H.264 encoding by default | Higher CPU use, or AV1 only | Encoder detection, AV1, OpenH264 and an RPM Fusion guide |
 | Unsigned Windows app | SmartScreen warning and possible antivirus false positives | Download-page guidance, checksums and false-positive reports |
 | MediaMTX details (simulcast, ending a viewer's session from Go) are unverified | Parts of the design may change | Verify early in phase 2 |
+| Pausing depends on our own MediaMTX build, based on an unmerged PR | Upgrades need a rebase; upstream may merge a different design | Small patch on a pinned release, our own tests, and a Go fallback to closing sessions |
+| Resuming an OBS (RTMP/SRT) stream waits for its keyframe interval | Slower resume for OBS streams | Recommend a 1–2 second keyframe interval in the OBS guide |
 | No server-side transcoding by default | Viewers on slow connections may stall | Bandwidth warnings, the app's low-quality version and on-demand transcodes |
 | Networks that block UDP | Some viewers cannot connect | ICE over TCP on port 8189; TURN later |
-| Discord bot outages | Viewers could be removed incorrectly | Kicks pause until the voice state is fresh |
+| Discord bot outages | Viewers could be paused or removed incorrectly | Pauses and kicks wait until the voice state is fresh |
 | Bot in more than 100 servers | Discord verification required | Apply for verification when needed |
 
-*12 October 2026 - Radu Stoiana*
+*13 October 2026 - Radu Stoiana*
