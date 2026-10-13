@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -14,61 +15,145 @@ import (
 	"github.com/RAdu2005/cupstream/server/internal/api"
 	"github.com/RAdu2005/cupstream/server/internal/auth"
 	"github.com/RAdu2005/cupstream/server/internal/config"
+	"github.com/RAdu2005/cupstream/server/internal/gateway"
 	"github.com/RAdu2005/cupstream/server/internal/mediamtx"
+	"github.com/RAdu2005/cupstream/server/internal/mediamtx/mtxtest"
+	"github.com/RAdu2005/cupstream/server/internal/oauth"
+	"github.com/RAdu2005/cupstream/server/internal/rooms"
+	"github.com/RAdu2005/cupstream/server/internal/seal"
 	"github.com/RAdu2005/cupstream/server/internal/store"
 )
 
 type testEnv struct {
-	srv    *httptest.Server
-	client *http.Client
+	srv     *httptest.Server
+	db      *store.DB
+	mtx     *mtxtest.Fake
+	gw      *gateway.Gateway
+	google  *mockGoogle
+	discord *mockDiscord
 }
 
-func newTestEnv(t *testing.T, devLogin bool, mediamtxUp bool) *testEnv {
+type envOptions struct {
+	devLogin     bool
+	mediamtxDown bool
+	oauth        bool
+}
+
+func newTestEnv(t *testing.T, o envOptions) *testEnv {
 	t.Helper()
 	ctx := context.Background()
-
 	db, err := store.Open(ctx, ":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
 
-	mtx := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !mediamtxUp || r.URL.Path != "/v3/info" {
-			http.Error(w, "down", http.StatusServiceUnavailable)
-			return
-		}
-		io.WriteString(w, `{"version":"v1.21.2-cupstream.1","started":"2026-10-13T10:00:00Z"}`)
-	}))
-	t.Cleanup(mtx.Close)
-	mtxURL, _ := url.Parse(mtx.URL)
+	e := &testEnv{db: db, mtx: mtxtest.New(t)}
+	mtxURL := e.mtx.URL
+	if o.mediamtxDown {
+		mtxURL, _ = url.Parse("http://127.0.0.1:1")
+	}
+	sealer, _ := seal.New(bytes.Repeat([]byte{1}, 32))
+	media := mediamtx.New(mtxURL, mtxURL)
+	rs := rooms.New(db)
 
-	cfg := &config.Config{PublicURL: &url.URL{Scheme: "http", Host: "localhost"}, DevLogin: devLogin, MediaMTXAPI: mtxURL}
-	web := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "website") })
-	h := New(cfg, db, auth.NewSessions(db, false), mediamtx.New(mtxURL), web).Handler()
+	// The server's own URL is only known once it starts; handlers read it
+	// through cfg at request time.
+	cfg := &config.Config{PublicURL: &url.URL{Scheme: "http", Host: "localhost"}, DevLogin: o.devLogin}
+	deps := Deps{
+		Config: cfg, DB: db, Sealer: sealer, Sessions: auth.NewSessions(db, false),
+		Rooms: rs, MediaMTX: media, Providers: map[string]oauth.Provider{},
+		Web: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "website") }),
+	}
+	if o.oauth {
+		e.google = newMockGoogle(t)
+		e.discord = newMockDiscord(t)
+		deps.Providers[oauth.Google] = oauth.NewGoogle(e.google.URL, "google-client", "secret", "http://localhost/api/auth/google/callback")
+		dp := oauth.NewDiscord(e.discord.URL, e.discord.URL, "discord-client", "secret", "http://localhost/api/auth/discord/callback")
+		deps.Providers[oauth.Discord] = dp
+		deps.Discord = auth.NewDiscordSync(db, sealer, dp)
+	}
+	deps.Accounts = auth.NewAccounts(db, deps.Discord)
+	e.gw = gateway.New(db, media, rs, cfg.PublicURL)
+	deps.Gateway = e.gw
 
-	srv := httptest.NewServer(h)
-	t.Cleanup(srv.Close)
-	jar, _ := cookiejar.New(nil)
-	return &testEnv{srv: srv, client: &http.Client{Jar: jar}}
+	e.srv = httptest.NewServer(New(deps).Handler())
+	t.Cleanup(e.srv.Close)
+	cfg.PublicURL, _ = url.Parse(e.srv.URL)
+	return e
 }
 
-func (e *testEnv) do(t *testing.T, method, path, body string, header map[string]string) (int, string) {
-	t.Helper()
-	req, _ := http.NewRequest(method, e.srv.URL+path, strings.NewReader(body))
-	for k, v := range header {
-		req.Header.Set(k, v)
+// browser is one user agent with its own cookies.
+type browser struct {
+	t   *testing.T
+	e   *testEnv
+	hc  *http.Client
+	jar *cookiejar.Jar
+}
+
+func (e *testEnv) browser(t *testing.T) *browser {
+	jar, _ := cookiejar.New(nil)
+	return &browser{t: t, e: e, jar: jar, hc: &http.Client{
+		Jar:           jar,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}}
+}
+
+type response struct {
+	status int
+	body   string
+	header http.Header
+}
+
+func (b *browser) do(method, path, body string, header ...string) response {
+	b.t.Helper()
+	target := path
+	if strings.HasPrefix(path, "/") {
+		target = b.e.srv.URL + path
 	}
-	if k := header["Host"]; k != "" {
-		req.Host = k
+	req, _ := http.NewRequest(method, target, strings.NewReader(body))
+	if body != "" && !strings.HasPrefix(body, "v=0") {
+		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := e.client.Do(req)
+	for i := 0; i+1 < len(header); i += 2 {
+		if header[i] == "Host" {
+			req.Host = header[i+1]
+		} else {
+			req.Header.Set(header[i], header[i+1])
+		}
+	}
+	resp, err := b.hc.Do(req)
 	if err != nil {
-		t.Fatal(err)
+		b.t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	b, _ := io.ReadAll(resp.Body)
-	return resp.StatusCode, string(b)
+	out, _ := io.ReadAll(resp.Body)
+	return response{resp.StatusCode, string(out), resp.Header}
+}
+
+func (b *browser) json(method, path string, in, out any, want int) {
+	b.t.Helper()
+	body := ""
+	if in != nil {
+		raw, _ := json.Marshal(in)
+		body = string(raw)
+	}
+	r := b.do(method, path, body)
+	if r.status != want {
+		b.t.Fatalf("%s %s = %d %s, want %d", method, path, r.status, r.body, want)
+	}
+	if out != nil {
+		if err := json.Unmarshal([]byte(r.body), out); err != nil {
+			b.t.Fatalf("%s %s: decode %q: %v", method, path, r.body, err)
+		}
+	}
+}
+
+func (b *browser) devLogin(handle string) api.User {
+	b.t.Helper()
+	var me api.Me
+	b.json("POST", "/api/auth/dev/login", api.DevLoginRequest{Handle: handle}, &me, http.StatusOK)
+	return me.User
 }
 
 func decode[T any](t *testing.T, s string) T {
@@ -81,97 +166,128 @@ func decode[T any](t *testing.T, s string) T {
 }
 
 func TestHealth(t *testing.T) {
-	status, body := newTestEnv(t, false, true).do(t, "GET", "/healthz", "", nil)
-	h := decode[api.Health](t, body)
-	if status != 200 || h.Status != "ok" || !h.Database || h.MediaMTX.Version != "v1.21.2-cupstream.1" {
-		t.Fatalf("got %d %+v", status, h)
+	b := newTestEnv(t, envOptions{}).browser(t)
+	r := b.do("GET", "/healthz", "")
+	h := decode[api.Health](t, r.body)
+	if r.status != 200 || h.Status != "ok" || !h.Database || h.MediaMTX.Version != "v1.21.2-cupstream.1" {
+		t.Fatalf("got %d %+v", r.status, h)
 	}
 
-	status, body = newTestEnv(t, false, false).do(t, "GET", "/healthz", "", nil)
-	h = decode[api.Health](t, body)
-	if status != 200 || h.Status != "degraded" || h.MediaMTX.Reachable {
-		t.Fatalf("got %d %+v", status, h)
+	b = newTestEnv(t, envOptions{mediamtxDown: true}).browser(t)
+	r = b.do("GET", "/healthz", "")
+	h = decode[api.Health](t, r.body)
+	if r.status != 200 || h.Status != "degraded" || h.MediaMTX.Reachable {
+		t.Fatalf("got %d %+v", r.status, h)
 	}
 }
 
 func TestDevLoginFlow(t *testing.T) {
-	e := newTestEnv(t, true, true)
+	b := newTestEnv(t, envOptions{devLogin: true}).browser(t)
 
-	_, body := e.do(t, "GET", "/api/auth/providers", "", nil)
-	if p := decode[api.AuthProviders](t, body); len(p.Providers) != 1 || p.Providers[0] != "dev" {
-		t.Fatalf("providers = %v", p.Providers)
+	var providers api.AuthProviders
+	b.json("GET", "/api/auth/providers", nil, &providers, 200)
+	if len(providers.Providers) != 1 || providers.Providers[0] != "dev" {
+		t.Fatalf("providers = %v", providers.Providers)
 	}
+	b.json("GET", "/api/me", nil, nil, http.StatusUnauthorized)
 
-	if status, _ := e.do(t, "GET", "/api/me", "", nil); status != http.StatusUnauthorized {
-		t.Fatalf("anonymous /api/me = %d", status)
-	}
-
-	status, body := e.do(t, "POST", "/api/auth/dev/login", `{"handle":"Alice"}`, nil)
-	if status != 200 {
-		t.Fatalf("login = %d %s", status, body)
-	}
-	first := decode[api.Me](t, body).User
+	first := b.devLogin("Alice")
 	if first.Handle != "alice" {
 		t.Fatalf("handle = %q", first.Handle)
 	}
-
-	status, body = e.do(t, "GET", "/api/me", "", nil)
-	if status != 200 || decode[api.Me](t, body).User.ID != first.ID {
-		t.Fatalf("/api/me = %d %s", status, body)
+	var me api.Me
+	b.json("GET", "/api/me", nil, &me, 200)
+	if me.User.ID != first.ID {
+		t.Fatal("/api/me returned another user")
 	}
-
-	// Signing in again returns the same user.
-	_, body = e.do(t, "POST", "/api/auth/dev/login", `{"handle":"alice"}`, nil)
-	if decode[api.Me](t, body).User.ID != first.ID {
+	if again := b.devLogin("alice"); again.ID != first.ID {
 		t.Fatal("second login created a new user")
 	}
-
-	if status, _ := e.do(t, "POST", "/api/auth/logout", "", nil); status != http.StatusNoContent {
-		t.Fatalf("logout = %d", status)
-	}
-	if status, _ := e.do(t, "GET", "/api/me", "", nil); status != http.StatusUnauthorized {
-		t.Fatalf("/api/me after logout = %d", status)
-	}
+	b.json("POST", "/api/auth/logout", nil, nil, http.StatusNoContent)
+	b.json("GET", "/api/me", nil, nil, http.StatusUnauthorized)
 }
 
 func TestDevLoginRefusals(t *testing.T) {
-	e := newTestEnv(t, true, true)
+	b := newTestEnv(t, envOptions{devLogin: true}).browser(t)
 	for name, tc := range map[string]struct {
 		body   string
-		header map[string]string
+		header []string
 		want   int
 	}{
 		"invalid handle": {`{"handle":"a b"}`, nil, http.StatusBadRequest},
 		"unknown field":  {`{"handle":"bob","admin":true}`, nil, http.StatusBadRequest},
-		"public host":    {`{"handle":"bob"}`, map[string]string{"Host": "cup.example.com"}, http.StatusForbidden},
-		"cross-site":     {`{"handle":"bob"}`, map[string]string{"Sec-Fetch-Site": "cross-site", "Origin": "https://evil.example"}, http.StatusForbidden},
-		"foreign origin": {`{"handle":"bob"}`, map[string]string{"Origin": "https://evil.example"}, http.StatusForbidden},
+		"public host":    {`{"handle":"bob"}`, []string{"Host", "cup.example.com"}, http.StatusForbidden},
+		"cross-site":     {`{"handle":"bob"}`, []string{"Sec-Fetch-Site", "cross-site", "Origin", "https://evil.example"}, http.StatusForbidden},
+		"foreign origin": {`{"handle":"bob"}`, []string{"Origin", "https://evil.example"}, http.StatusForbidden},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if status, body := e.do(t, "POST", "/api/auth/dev/login", tc.body, tc.header); status != tc.want {
-				t.Fatalf("got %d %s, want %d", status, body, tc.want)
+			if r := b.do("POST", "/api/auth/dev/login", tc.body, tc.header...); r.status != tc.want {
+				t.Fatalf("got %d %s, want %d", r.status, r.body, tc.want)
 			}
 		})
 	}
 }
 
 func TestDevLoginDisabled(t *testing.T) {
-	e := newTestEnv(t, false, true)
-	if status, _ := e.do(t, "POST", "/api/auth/dev/login", `{"handle":"bob"}`, nil); status != http.StatusNotFound {
-		t.Fatalf("got %d", status)
+	b := newTestEnv(t, envOptions{}).browser(t)
+	if r := b.do("POST", "/api/auth/dev/login", `{"handle":"bob"}`); r.status != http.StatusNotFound {
+		t.Fatalf("got %d", r.status)
 	}
-	_, body := e.do(t, "GET", "/api/auth/providers", "", nil)
-	if p := decode[api.AuthProviders](t, body); len(p.Providers) != 0 {
-		t.Fatalf("providers = %v", p.Providers)
+	var providers api.AuthProviders
+	b.json("GET", "/api/auth/providers", nil, &providers, 200)
+	if len(providers.Providers) != 0 {
+		t.Fatalf("providers = %v", providers.Providers)
 	}
 }
 
 func TestRouting(t *testing.T) {
-	e := newTestEnv(t, false, true)
-	if status, body := e.do(t, "GET", "/api/nope", "", nil); status != 404 || !strings.Contains(body, `"error"`) {
-		t.Fatalf("unknown API path = %d %s", status, body)
+	b := newTestEnv(t, envOptions{}).browser(t)
+	if r := b.do("GET", "/api/nope", ""); r.status != 404 || !strings.Contains(r.body, `"error"`) {
+		t.Fatalf("unknown API path = %d %s", r.status, r.body)
 	}
-	if status, body := e.do(t, "GET", "/rooms/x", "", nil); status != 200 || body != "website" {
-		t.Fatalf("website path = %d %s", status, body)
+	if r := b.do("GET", "/rooms/x", ""); r.status != 200 || r.body != "website" {
+		t.Fatalf("website path = %d %s", r.status, r.body)
 	}
+}
+
+func TestProfileAndSettings(t *testing.T) {
+	e := newTestEnv(t, envOptions{devLogin: true})
+	a, b := e.browser(t), e.browser(t)
+	a.devLogin("alice")
+	b.devLogin("bob")
+
+	var me api.Me
+	a.json("PATCH", "/api/account", api.UpdateProfileRequest{Handle: "Alice_2", DisplayName: "Alice"}, &me, 200)
+	if me.User.Handle != "alice_2" {
+		t.Fatalf("handle = %q", me.User.Handle)
+	}
+	a.json("PATCH", "/api/account", api.UpdateProfileRequest{Handle: "bob", DisplayName: "Alice"}, nil, http.StatusConflict)
+
+	a.json("PATCH", "/api/account/settings", api.Settings{StartMode: "link", ObsFallback: "refuse"}, nil, 200)
+	a.json("PATCH", "/api/account/settings", api.Settings{StartMode: "elsewhere", ObsFallback: "link"}, nil, http.StatusBadRequest)
+	var acc api.Account
+	a.json("GET", "/api/account", nil, &acc, 200)
+	if acc.Settings.StartMode != "link" || acc.Settings.ObsFallback != "refuse" || acc.RoomSlug == "" || len(acc.Identities) != 1 {
+		t.Fatalf("account = %+v", acc)
+	}
+
+	// Sessions: a second browser for alice, revoked from the first.
+	a2 := e.browser(t)
+	a2.devLogin("alice") // the dev identity keeps its subject after the handle change
+	var sessions []api.Session
+	a.json("GET", "/api/account/sessions", nil, &sessions, 200)
+	if len(sessions) != 2 {
+		t.Fatalf("%d sessions", len(sessions))
+	}
+	for _, s := range sessions {
+		if !s.Current {
+			a.json("DELETE", "/api/account/sessions/"+s.ID, nil, nil, http.StatusNoContent)
+		}
+	}
+	a2.json("GET", "/api/me", nil, nil, http.StatusUnauthorized)
+	a.json("GET", "/api/me", nil, nil, 200)
+	b.json("DELETE", "/api/account/sessions/"+sessions[0].ID, nil, nil, http.StatusNotFound)
+
+	// Unlinking the only sign-in method is refused.
+	a.json("DELETE", "/api/account/identities/dev", nil, nil, http.StatusConflict)
 }

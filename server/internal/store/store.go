@@ -106,3 +106,12 @@ func IsUniqueViolation(err error) bool {
 	}
 	return e.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE || e.Code() == sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY
 }
+
+// UserSettings returns the user's settings, creating the defaults if the
+// user has none yet.
+func (d *DB) UserSettings(ctx context.Context, userID string) (UserSetting, error) {
+	if err := d.CreateUserSettings(ctx, userID); err != nil {
+		return UserSetting{}, err
+	}
+	return d.GetUserSettings(ctx, userID)
+}

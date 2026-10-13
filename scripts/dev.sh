@@ -8,6 +8,16 @@ cd "$(dirname "$0")/.."
 docker compose up -d --build mediamtx
 [ -d web/node_modules ] || (cd web && npm ci)
 
+# Google/Discord OAuth credentials, if any, come from .env.
+set -a
+[ -f .env ] && . ./.env
+set +a
+
+# A persistent development secret key, so stored Discord tokens survive restarts.
+mkdir -p data
+[ -f data/dev-secret-key ] || head -c 32 /dev/urandom | base64 > data/dev-secret-key
+export CUPSTREAM_SECRET_KEY="${CUPSTREAM_SECRET_KEY:-$(cat data/dev-secret-key)}"
+
 export CUPSTREAM_ADDR=127.0.0.1:8080
 export CUPSTREAM_PUBLIC_URL=http://localhost:5173
 export CUPSTREAM_DB="$PWD/data/dev.db"

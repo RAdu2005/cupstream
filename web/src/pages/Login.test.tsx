@@ -24,6 +24,7 @@ test('development login signs in and returns home', async () => {
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     if (url === '/api/me') return json(401, { error: 'sign in required' });
     if (url === '/api/auth/providers') return json(200, { providers: ['dev'] });
+    if (url === '/api/account') return json(200, { user, identities: [], settings: {}, roomSlug: 'abc' });
     if (url === '/api/auth/dev/login') {
       expect(JSON.parse(init?.body as string)).toEqual({ handle: 'alice' });
       return json(200, { user });
@@ -38,6 +39,21 @@ test('development login signs in and returns home', async () => {
 
   await waitFor(() => expect(router.state.location.pathname).toBe('/'));
   expect(await screen.findByText('Welcome, alice')).toBeInTheDocument();
+});
+
+test('offers the configured providers and shows OAuth errors', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) =>
+      url === '/api/me' ? json(401, { error: 'sign in required' }) : json(200, { providers: ['google', 'discord'] }),
+    ),
+  );
+  renderAt('/login?error=cancelled&next=/r/abc');
+  const discord = await screen.findByRole('link', { name: 'Continue with Discord' });
+  expect(discord).toHaveAttribute('href', '/api/auth/discord/start?next=%2Fr%2Fabc');
+  expect(screen.getByRole('link', { name: 'Continue with Google' })).toBeInTheDocument();
+  expect(screen.getByText('Sign-in was cancelled.')).toBeInTheDocument();
+  expect(screen.queryByText('Development login')).not.toBeInTheDocument();
 });
 
 test('shows a message when no sign-in method is configured', async () => {

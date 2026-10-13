@@ -67,12 +67,86 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 	return i, err
 }
 
+const createUserSettings = `-- name: CreateUserSettings :exec
+INSERT INTO user_settings (user_id) VALUES (?) ON CONFLICT DO NOTHING
+`
+
+func (q *Queries) CreateUserSettings(ctx context.Context, userID string) error {
+	_, err := q.db.ExecContext(ctx, createUserSettings, userID)
+	return err
+}
+
+const deleteIdentity = `-- name: DeleteIdentity :execrows
+DELETE FROM identities WHERE user_id = ? AND provider = ?
+`
+
+type DeleteIdentityParams struct {
+	UserID   string
+	Provider string
+}
+
+func (q *Queries) DeleteIdentity(ctx context.Context, arg DeleteIdentityParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteIdentity, arg.UserID, arg.Provider)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteUser = `-- name: DeleteUser :exec
+DELETE FROM users WHERE id = ?
+`
+
+func (q *Queries) DeleteUser(ctx context.Context, id string) error {
+	_, err := q.db.ExecContext(ctx, deleteUser, id)
+	return err
+}
+
+const getIdentity = `-- name: GetIdentity :one
+SELECT provider, subject, user_id, username, created_at FROM identities WHERE provider = ? AND subject = ?
+`
+
+type GetIdentityParams struct {
+	Provider string
+	Subject  string
+}
+
+func (q *Queries) GetIdentity(ctx context.Context, arg GetIdentityParams) (Identity, error) {
+	row := q.db.QueryRowContext(ctx, getIdentity, arg.Provider, arg.Subject)
+	var i Identity
+	err := row.Scan(
+		&i.Provider,
+		&i.Subject,
+		&i.UserID,
+		&i.Username,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getUser = `-- name: GetUser :one
 SELECT id, handle, display_name, avatar_url, created_at FROM users WHERE id = ?
 `
 
 func (q *Queries) GetUser(ctx context.Context, id string) (User, error) {
 	row := q.db.QueryRowContext(ctx, getUser, id)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Handle,
+		&i.DisplayName,
+		&i.AvatarURL,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getUserByHandle = `-- name: GetUserByHandle :one
+SELECT id, handle, display_name, avatar_url, created_at FROM users WHERE handle = ?
+`
+
+func (q *Queries) GetUserByHandle(ctx context.Context, handle string) (User, error) {
+	row := q.db.QueryRowContext(ctx, getUserByHandle, handle)
 	var i User
 	err := row.Scan(
 		&i.ID,
@@ -107,4 +181,142 @@ func (q *Queries) GetUserByIdentity(ctx context.Context, arg GetUserByIdentityPa
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const getUserSettings = `-- name: GetUserSettings :one
+SELECT user_id, start_mode, obs_fallback FROM user_settings WHERE user_id = ?
+`
+
+func (q *Queries) GetUserSettings(ctx context.Context, userID string) (UserSetting, error) {
+	row := q.db.QueryRowContext(ctx, getUserSettings, userID)
+	var i UserSetting
+	err := row.Scan(&i.UserID, &i.StartMode, &i.ObsFallback)
+	return i, err
+}
+
+const handleTaken = `-- name: HandleTaken :one
+SELECT EXISTS (SELECT 1 FROM users WHERE handle = ?)
+`
+
+func (q *Queries) HandleTaken(ctx context.Context, handle string) (bool, error) {
+	row := q.db.QueryRowContext(ctx, handleTaken, handle)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
+const listIdentities = `-- name: ListIdentities :many
+SELECT provider, subject, user_id, username, created_at FROM identities WHERE user_id = ? ORDER BY provider
+`
+
+func (q *Queries) ListIdentities(ctx context.Context, userID string) ([]Identity, error) {
+	rows, err := q.db.QueryContext(ctx, listIdentities, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Identity{}
+	for rows.Next() {
+		var i Identity
+		if err := rows.Scan(
+			&i.Provider,
+			&i.Subject,
+			&i.UserID,
+			&i.Username,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const moveIdentity = `-- name: MoveIdentity :exec
+UPDATE identities SET user_id = ?1 WHERE provider = ?2 AND subject = ?3
+`
+
+type MoveIdentityParams struct {
+	ToUser   string
+	Provider string
+	Subject  string
+}
+
+func (q *Queries) MoveIdentity(ctx context.Context, arg MoveIdentityParams) error {
+	_, err := q.db.ExecContext(ctx, moveIdentity, arg.ToUser, arg.Provider, arg.Subject)
+	return err
+}
+
+const setAvatarIfEmpty = `-- name: SetAvatarIfEmpty :exec
+UPDATE users SET avatar_url = ? WHERE id = ? AND (avatar_url IS NULL OR avatar_url = '')
+`
+
+type SetAvatarIfEmptyParams struct {
+	AvatarURL sql.NullString
+	ID        string
+}
+
+func (q *Queries) SetAvatarIfEmpty(ctx context.Context, arg SetAvatarIfEmptyParams) error {
+	_, err := q.db.ExecContext(ctx, setAvatarIfEmpty, arg.AvatarURL, arg.ID)
+	return err
+}
+
+const updateIdentityUsername = `-- name: UpdateIdentityUsername :exec
+UPDATE identities SET username = ? WHERE provider = ? AND subject = ?
+`
+
+type UpdateIdentityUsernameParams struct {
+	Username string
+	Provider string
+	Subject  string
+}
+
+func (q *Queries) UpdateIdentityUsername(ctx context.Context, arg UpdateIdentityUsernameParams) error {
+	_, err := q.db.ExecContext(ctx, updateIdentityUsername, arg.Username, arg.Provider, arg.Subject)
+	return err
+}
+
+const updateProfile = `-- name: UpdateProfile :one
+UPDATE users SET handle = ?, display_name = ? WHERE id = ?
+RETURNING id, handle, display_name, avatar_url, created_at
+`
+
+type UpdateProfileParams struct {
+	Handle      string
+	DisplayName string
+	ID          string
+}
+
+func (q *Queries) UpdateProfile(ctx context.Context, arg UpdateProfileParams) (User, error) {
+	row := q.db.QueryRowContext(ctx, updateProfile, arg.Handle, arg.DisplayName, arg.ID)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Handle,
+		&i.DisplayName,
+		&i.AvatarURL,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const updateUserSettings = `-- name: UpdateUserSettings :exec
+UPDATE user_settings SET start_mode = ?, obs_fallback = ? WHERE user_id = ?
+`
+
+type UpdateUserSettingsParams struct {
+	StartMode   string
+	ObsFallback string
+	UserID      string
+}
+
+func (q *Queries) UpdateUserSettings(ctx context.Context, arg UpdateUserSettingsParams) error {
+	_, err := q.db.ExecContext(ctx, updateUserSettings, arg.StartMode, arg.ObsFallback, arg.UserID)
+	return err
 }

@@ -1,7 +1,8 @@
-import { Radio } from 'lucide-react';
+import { Radio, Settings } from 'lucide-react';
 import { Link } from 'react-router';
+import { useAccount } from '@/api/account';
 import { useMe } from '@/api/auth';
-import { Card } from '@/components/ui';
+import { Button, Card } from '@/components/ui';
 
 export function Home() {
   const { data: user, isPending } = useMe();
@@ -10,7 +11,7 @@ export function Home() {
   return (
     <div className="mx-auto w-full max-w-3xl space-y-6 p-4 sm:p-8">
       {user ? (
-        <h1 className="text-2xl font-bold">Welcome, {user.displayName}</h1>
+        <SignedIn name={user.displayName} />
       ) : (
         <div className="space-y-2">
           <h1 className="text-3xl font-bold">Stream with your friends</h1>
@@ -23,11 +24,36 @@ export function Home() {
           </p>
         </div>
       )}
-      <Card className="flex flex-col items-center gap-2 py-12 text-center">
-        <Radio className="size-8 text-muted" aria-hidden />
-        <p className="font-semibold">Nobody is live right now</p>
-        <p className="text-sm text-muted">Streams from your friends and rooms will show up here.</p>
-      </Card>
     </div>
+  );
+}
+
+function SignedIn({ name }: { name: string }) {
+  const account = useAccount();
+  return (
+    <>
+      <h1 className="text-2xl font-bold">Welcome, {name}</h1>
+      <Card className="flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-3">
+          <Radio className="size-6 text-accent" aria-hidden />
+          <div>
+            <p className="font-semibold">Your link room</p>
+            <p className="text-sm text-muted">Stream there from OBS and share its link with the people you allow in.</p>
+          </div>
+        </div>
+        <div className="flex gap-2">
+          {account.data && (
+            <Link to={`/r/${account.data.roomSlug}`}>
+              <Button>Open room</Button>
+            </Link>
+          )}
+          <Link to="/settings">
+            <Button variant="secondary">
+              <Settings className="size-4" aria-hidden /> Settings
+            </Button>
+          </Link>
+        </div>
+      </Card>
+    </>
   );
 }

@@ -8,7 +8,7 @@ The design and the implementation plan are in [output/md/cupstream-project-overv
 
 | Path | What |
 |---|---|
-| `server/` | Go server: HTTP API, sessions, and later WHIP/WHEP gateway, realtime and the Discord bot. SQLite with goose migrations and sqlc queries. |
+| `server/` | Go server: OAuth sign-in and accounts, rooms and access checks (`internal/access`), the WHIP/WHEP media gateway (`internal/gateway`), and later realtime and the Discord bot. SQLite with goose migrations and sqlc queries. |
 | `web/` | Website: React, TypeScript, Vite, Tailwind CSS, TanStack Query, React Router. |
 | `deploy/mediamtx/` | MediaMTX image, built from [our fork](https://github.com/RAdu2005/mediamtx) at a pinned tag, and its configuration. |
 | `deploy/cupstream/` | systemd and OpenRC service files. |
@@ -31,7 +31,18 @@ make dev
 | `make build` | `bin/cupstream`, a single binary with the website embedded |
 | `make images` | Docker images for CupStream and MediaMTX |
 
-Database changes go in a new file in `server/internal/store/migrations/`, with queries in `server/internal/store/queries/`; run `make generate` afterwards. API types live in `server/internal/api/` so the website types can be generated from them.
+Database changes go in a new file in `server/internal/store/migrations/`, with queries in `server/internal/store/queries/`; run `make generate` afterwards. In a query, use either `?` or `sqlc.arg(name)` for all parameters, never both: sqlc numbers mixed parameters wrongly. API types live in `server/internal/api/` so the website types can be generated from them.
+
+### Signing in with Google and Discord
+
+The development login needs no setup. To try the real providers locally, create OAuth applications and put their credentials in `.env` (see [.env.example](.env.example)); `make dev` reads it.
+
+- **Google:** in the Google Cloud console, create an OAuth client of type *Web application* with the redirect URI `http://localhost:5173/api/auth/google/callback`. Scopes: `openid` and `profile`.
+- **Discord:** in the Discord developer portal, create an application and add the redirect `http://localhost:5173/api/auth/discord/callback` under OAuth2. Scopes: `identify` and `guilds`.
+
+### Streaming locally
+
+In your room's settings, generate a stream key. In OBS, choose the **WHIP** service with the server `http://localhost:5173/whip` and the key as the Bearer token; a co-streamer adds `?room=<slug>` to stream into someone else's room. Without OBS, ffmpeg 8 or later can publish a test pattern, but its WHIP client rejects ICE-over-TCP candidates, so run MediaMTX with `MTX_WEBRTCLOCALTCPADDRESS=` for that.
 
 ## Configuration
 

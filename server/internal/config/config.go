@@ -3,6 +3,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -12,6 +14,14 @@ import (
 	"strconv"
 	"strings"
 )
+
+// OAuthClient holds an OAuth application's credentials. The provider is
+// enabled when both are set.
+type OAuthClient struct {
+	ID, Secret string
+}
+
+func (c OAuthClient) Enabled() bool { return c.ID != "" }
 
 type Config struct {
 	// Addr is the listen address of the public HTTP server.
@@ -31,6 +41,15 @@ type Config struct {
 	// DevLogin enables the passwordless development login. It is refused
 	// unless PublicURL is a local development host.
 	DevLogin bool
+
+	// SecretKey (32 bytes) seals OAuth cookies and stored Discord refresh
+	// tokens. Required unless DevLogin is set, in which case a random key is
+	// used when it is missing.
+	SecretKey          []byte
+	SecretKeyGenerated bool
+
+	Google  OAuthClient
+	Discord OAuthClient
 
 	LogLevel  slog.Level
 	LogFormat string // "json" or "text"
@@ -75,6 +94,28 @@ func load(getenv func(string) string) (*Config, error) {
 		MediaMTXWebRTC: parseURL("MEDIAMTX_WEBRTC", "http://127.0.0.1:8889"),
 		DevLogin:       parseBool("DEV_LOGIN"),
 		LogFormat:      get("LOG_FORMAT", "json"),
+		Google:         OAuthClient{ID: get("GOOGLE_CLIENT_ID", ""), Secret: get("GOOGLE_CLIENT_SECRET", "")},
+		Discord:        OAuthClient{ID: get("DISCORD_CLIENT_ID", ""), Secret: get("DISCORD_CLIENT_SECRET", "")},
+	}
+
+	for name, oc := range map[string]OAuthClient{"GOOGLE": c.Google, "DISCORD": c.Discord} {
+		if (oc.ID == "") != (oc.Secret == "") {
+			errs = append(errs, fmt.Errorf("CUPSTREAM_%s_CLIENT_ID and CUPSTREAM_%s_CLIENT_SECRET must be set together", name, name))
+		}
+	}
+
+	if raw := get("SECRET_KEY", ""); raw != "" {
+		key, err := base64.StdEncoding.DecodeString(raw)
+		if err != nil || len(key) != 32 {
+			errs = append(errs, errors.New("CUPSTREAM_SECRET_KEY must be 32 bytes, base64-encoded (openssl rand -base64 32)"))
+		}
+		c.SecretKey = key
+	} else if c.DevLogin {
+		c.SecretKey = make([]byte, 32)
+		rand.Read(c.SecretKey)
+		c.SecretKeyGenerated = true
+	} else {
+		errs = append(errs, errors.New("CUPSTREAM_SECRET_KEY is required (generate one with: openssl rand -base64 32)"))
 	}
 
 	if err := c.LogLevel.UnmarshalText([]byte(get("LOG_LEVEL", "info"))); err != nil {

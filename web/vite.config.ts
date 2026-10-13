@@ -20,6 +20,7 @@ export default defineConfig({
     proxy: {
       '/api': { target: server, ws: true },
       '/healthz': { target: server },
+      '/whip': { target: server },
     },
   },
   build: {

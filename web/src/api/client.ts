@@ -4,6 +4,8 @@ export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    /** Machine-readable reason, e.g. "sign_in_required" or "not_allowed". */
+    readonly code?: string,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -25,12 +27,15 @@ export async function api<T>(path: string, init: RequestInit & { json?: unknown 
 
   if (!res.ok) {
     let message = res.statusText;
+    let code: string | undefined;
     try {
-      message = ((await res.json()) as ErrorResponse).error || message;
+      const body = (await res.json()) as ErrorResponse;
+      message = body.error || message;
+      code = body.code;
     } catch {
       // not a JSON error body
     }
-    throw new ApiError(res.status, message);
+    throw new ApiError(res.status, message, code);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;

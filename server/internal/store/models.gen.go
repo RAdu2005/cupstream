@@ -8,11 +8,65 @@ import (
 	"database/sql"
 )
 
+type DiscordToken struct {
+	UserID                string
+	EncryptedRefreshToken []byte
+	UpdatedAt             int64
+	GuildsSyncedAt        int64
+}
+
 type Identity struct {
 	Provider  string
 	Subject   string
 	UserID    string
 	Username  string
+	CreatedAt int64
+}
+
+type Invite struct {
+	ID             string
+	TokenHash      []byte
+	RoomID         string
+	CreatedBy      string
+	CanStream      bool
+	ExpiresAt      sql.NullInt64
+	UntilStreamEnd bool
+	MaxUses        sql.NullInt64
+	Uses           int64
+	CreatedAt      int64
+	RevokedAt      sql.NullInt64
+}
+
+type Room struct {
+	ID         string
+	Kind       string
+	Slug       string
+	OwnerID    sql.NullString
+	Visibility sql.NullString
+	GuildID    sql.NullString
+	ChannelID  sql.NullString
+	CreatedAt  int64
+}
+
+type RoomAllowed struct {
+	RoomID    string
+	UserID    string
+	CanStream bool
+	CreatedAt int64
+}
+
+type RoomBan struct {
+	RoomID    string
+	UserID    string
+	CreatedAt int64
+}
+
+type RoomPass struct {
+	RoomID    string
+	UserID    string
+	InviteID  sql.NullString
+	CanStream bool
+	ExpiresAt sql.NullInt64
 	CreatedAt int64
 }
 
@@ -27,10 +81,45 @@ type Session struct {
 	LastSeenAt int64
 }
 
+type Stream struct {
+	ID               string
+	RoomID           string
+	UserID           string
+	Source           string
+	PublishTokenHash []byte
+	StartedAt        int64
+	EndedAt          sql.NullInt64
+	EndReason        sql.NullString
+	PeakViewers      int64
+}
+
+type StreamKey struct {
+	ID        string
+	UserID    string
+	KeyHash   []byte
+	CreatedAt int64
+	RevokedAt sql.NullInt64
+}
+
 type User struct {
 	ID          string
 	Handle      string
 	DisplayName string
 	AvatarURL   sql.NullString
 	CreatedAt   int64
+}
+
+type UserGuild struct {
+	UserID             string
+	GuildID            string
+	Name               string
+	Icon               string
+	ApproxMembers      int64
+	SuggestionsEnabled bool
+}
+
+type UserSetting struct {
+	UserID      string
+	StartMode   string
+	ObsFallback string
 }

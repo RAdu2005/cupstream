@@ -4,3 +4,4 @@ packages:
     frontmatter: |
       // Source: server/internal/api. Regenerate with `make generate`.
       export type AuthProvider = 'dev' | 'google' | 'discord';
+      export type Visibility = 'everyone' | 'signed_in' | 'invite_only';

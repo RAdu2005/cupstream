@@ -60,6 +60,23 @@ func (q *Queries) DeleteSessionByTokenHash(ctx context.Context, tokenHash []byte
 	return err
 }
 
+const deleteUserSession = `-- name: DeleteUserSession :execrows
+DELETE FROM sessions WHERE id = ? AND user_id = ?
+`
+
+type DeleteUserSessionParams struct {
+	ID     string
+	UserID string
+}
+
+func (q *Queries) DeleteUserSession(ctx context.Context, arg DeleteUserSessionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteUserSession, arg.ID, arg.UserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const getSessionByTokenHash = `-- name: GetSessionByTokenHash :one
 SELECT sessions.id, sessions.token_hash, sessions.user_id, sessions.kind, sessions.device_name, sessions.created_at, sessions.expires_at, sessions.last_seen_at, users.id, users.handle, users.display_name, users.avatar_url, users.created_at
 FROM sessions
@@ -96,6 +113,47 @@ func (q *Queries) GetSessionByTokenHash(ctx context.Context, arg GetSessionByTok
 		&i.User.CreatedAt,
 	)
 	return i, err
+}
+
+const listSessions = `-- name: ListSessions :many
+SELECT id, token_hash, user_id, kind, device_name, created_at, expires_at, last_seen_at FROM sessions WHERE user_id = ? AND expires_at > ? ORDER BY last_seen_at DESC
+`
+
+type ListSessionsParams struct {
+	UserID    string
+	ExpiresAt int64
+}
+
+func (q *Queries) ListSessions(ctx context.Context, arg ListSessionsParams) ([]Session, error) {
+	rows, err := q.db.QueryContext(ctx, listSessions, arg.UserID, arg.ExpiresAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Session{}
+	for rows.Next() {
+		var i Session
+		if err := rows.Scan(
+			&i.ID,
+			&i.TokenHash,
+			&i.UserID,
+			&i.Kind,
+			&i.DeviceName,
+			&i.CreatedAt,
+			&i.ExpiresAt,
+			&i.LastSeenAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const touchSession = `-- name: TouchSession :exec

@@ -2,8 +2,19 @@ package config
 
 import "testing"
 
-func env(m map[string]string) func(string) string {
-	return func(k string) string { return m[k] }
+const testKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+
+// env returns a getenv for vars, with a valid secret key unless vars sets one.
+func env(vars map[string]string) func(string) string {
+	return func(k string) string {
+		if v, ok := vars[k]; ok {
+			return v
+		}
+		if k == "CUPSTREAM_SECRET_KEY" {
+			return testKey
+		}
+		return ""
+	}
 }
 
 func TestDefaults(t *testing.T) {
@@ -23,6 +34,9 @@ func TestErrors(t *testing.T) {
 		"bad url":                  {"CUPSTREAM_MEDIAMTX_API": "127.0.0.1:9997"},
 		"half tls":                 {"CUPSTREAM_TLS_CERT": "cert.pem"},
 		"bad log level":            {"CUPSTREAM_LOG_LEVEL": "loud"},
+		"missing secret key":       {"CUPSTREAM_SECRET_KEY": ""},
+		"short secret key":         {"CUPSTREAM_SECRET_KEY": "c2hvcnQ="},
+		"half google client":       {"CUPSTREAM_GOOGLE_CLIENT_ID": "id"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := load(env(vars)); err == nil {
@@ -48,5 +62,12 @@ func TestIsLocalHost(t *testing.T) {
 		if got := IsLocalHost(host); got != want {
 			t.Errorf("IsLocalHost(%q) = %v, want %v", host, got, want)
 		}
+	}
+}
+
+func TestDevLoginGeneratesSecretKey(t *testing.T) {
+	c, err := load(env(map[string]string{"CUPSTREAM_DEV_LOGIN": "1", "CUPSTREAM_SECRET_KEY": ""}))
+	if err != nil || len(c.SecretKey) != 32 || !c.SecretKeyGenerated {
+		t.Fatalf("got %v, generated=%v", err, c != nil && c.SecretKeyGenerated)
 	}
 }

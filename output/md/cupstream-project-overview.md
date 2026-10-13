@@ -79,7 +79,7 @@ The build lives in a fork, [RAdu2005/mediamtx](https://github.com/RAdu2005/media
 The changes:
 
 1. **Keyframe request on resume.** Resuming asks the stream's source for a keyframe straight away (a PLI to WebRTC publishers), limited to one request per stream every 300 ms so a burst of resumes shares one keyframe. RTMP and SRT sources cannot be asked and keep their own keyframe interval.
-2. **Control through the localhost API only.** New endpoints `POST /v3/webrtcsessions/pause/{id}` and `/resume/{id}`, a configuration flag that disables the public JSON `PATCH`, and the session ID returned in a response header of the WHEP `POST` so Go can map sessions to viewers.
+2. **Control through the localhost API only.** New endpoints `POST /v3/webrtcsessions/pause/{id}` and `/resume/{id}`, and a configuration flag that disables the public JSON `PATCH`. MediaMTX already returns the session's API ID in the `ID` header of the WHEP `POST`, which Go uses to map sessions to viewers.
 3. **No hanging requests.** A pause request that arrives before the connection exists is stored and applied once it does, or answered with 409, instead of blocking until the session ends.
 4. **Paused timeout.** A session that stays paused longer than a configurable time (`webrtcPausedTimeout`, 2 minutes by default) is closed, in case Go never sends its `DELETE`.
 5. **Paused state in the API.** `/v3/webrtcsessions` reports `paused` and `pausedSince`, so Go can rebuild its view after a restart.
@@ -216,7 +216,7 @@ The browser's screen capture (`getDisplayMedia`) is published over WHIP. It need
 
 ### 6.4 OBS
 
-- One fixed WHIP URL (`https://<domain>/whip`) with the user's stream key as the bearer token. The key is stored hashed and can be regenerated.
+- One fixed WHIP URL (`https://<domain>/whip`) with the user's stream key as the bearer token. The key is stored hashed and can be regenerated. A co-streamer streams into someone else's link room by adding `?room=<slug>` to the URL; the room page shows that URL to people who may stream there.
 - The destination follows the user's start mode. OBS cannot show warnings, so *Discord (auto)* has a fallback setting for when no Discord room is possible: stream to the link room (default) or refuse.
 - OBS reconnects automatically. After a stream in a Discord room ends because the user left voice, the key is refused for about two minutes so the reconnect does not quietly continue in the link room; rejoining voice within that time reconnects into the Discord room.
 - A setup guide recommends H.264 or AV1, B-frames off, a 1–2 second keyframe interval and Opus audio; HEVC is refused. OBS 32.1 added simulcast over WHIP, but MediaMTX support for it is unconfirmed, so it is treated as unsupported.

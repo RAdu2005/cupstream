@@ -1,4 +1,5 @@
-// Package httpapi is the public HTTP entry point: the JSON API, health check
+// Package httpapi is the public HTTP entry point: the JSON API, OAuth
+// redirects, WHIP/WHEP signaling (handed to the gateway), the health check
 // and the website.
 package httpapi
 
@@ -13,50 +14,96 @@ import (
 	"github.com/RAdu2005/cupstream/server/internal/api"
 	"github.com/RAdu2005/cupstream/server/internal/auth"
 	"github.com/RAdu2005/cupstream/server/internal/config"
+	"github.com/RAdu2005/cupstream/server/internal/gateway"
 	"github.com/RAdu2005/cupstream/server/internal/mediamtx"
+	"github.com/RAdu2005/cupstream/server/internal/oauth"
+	"github.com/RAdu2005/cupstream/server/internal/rooms"
+	"github.com/RAdu2005/cupstream/server/internal/seal"
 	"github.com/RAdu2005/cupstream/server/internal/store"
 )
 
-type Server struct {
-	cfg      *config.Config
-	db       *store.DB
-	sessions *auth.Sessions
-	media    *mediamtx.Client
-	web      http.Handler
+// Deps are the services the HTTP layer uses.
+type Deps struct {
+	Config    *config.Config
+	DB        *store.DB
+	Sealer    *seal.Sealer
+	Sessions  *auth.Sessions
+	Accounts  *auth.Accounts
+	Discord   *auth.DiscordSync // nil without Discord sign-in
+	Providers map[string]oauth.Provider
+	Rooms     *rooms.Service
+	Gateway   *gateway.Gateway
+	MediaMTX  *mediamtx.Client
+	Web       http.Handler
 }
 
-func New(cfg *config.Config, db *store.DB, sessions *auth.Sessions, media *mediamtx.Client, web http.Handler) *Server {
-	return &Server{cfg: cfg, db: db, sessions: sessions, media: media, web: web}
-}
+type Server struct{ Deps }
+
+func New(d Deps) *Server { return &Server{d} }
 
 // Handler returns the root handler with all middleware applied.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
 
+	// Sign-in.
 	mux.HandleFunc("GET /api/auth/providers", s.authProviders)
 	mux.HandleFunc("POST /api/auth/logout", s.logout)
-	if s.cfg.DevLogin {
+	if s.Config.DevLogin {
 		mux.HandleFunc("POST /api/auth/dev/login", s.devLogin)
 	}
+	mux.HandleFunc("GET /api/auth/{provider}/start", s.oauthStart)
+	mux.HandleFunc("GET /api/auth/{provider}/callback", s.oauthCallback)
 	mux.Handle("GET /api/me", requireUser(s.me))
+
+	// Account settings.
+	mux.Handle("GET /api/account", requireUser(s.account))
+	mux.Handle("PATCH /api/account", requireUser(s.updateProfile))
+	mux.Handle("PATCH /api/account/settings", requireUser(s.updateSettings))
+	mux.Handle("DELETE /api/account/identities/{provider}", requireUser(s.unlink))
+	mux.Handle("GET /api/account/sessions", requireUser(s.listSessions))
+	mux.Handle("DELETE /api/account/sessions/{id}", requireUser(s.revokeSession))
+	mux.Handle("GET /api/account/guilds", requireUser(s.listGuilds))
+	mux.Handle("PATCH /api/account/guilds/{id}", requireUser(s.updateGuild))
+	mux.Handle("GET /api/account/merge", requireUser(s.pendingMerge))
+	mux.Handle("POST /api/account/merge", requireUser(s.confirmMerge))
+	mux.Handle("DELETE /api/account/merge", requireUser(s.cancelMerge))
+	mux.Handle("GET /api/account/stream-key", requireUser(s.streamKey))
+	mux.Handle("POST /api/account/stream-key", requireUser(s.regenerateStreamKey))
+
+	// Rooms and streams.
+	mux.HandleFunc("GET /api/rooms/{slug}", s.getRoom)
+	mux.Handle("PATCH /api/rooms/{slug}", requireUser(s.updateRoom))
+	mux.Handle("GET /api/rooms/{slug}/allowed", requireUser(s.listAllowed))
+	mux.Handle("PUT /api/rooms/{slug}/allowed/{handle}", requireUser(s.setAllowed))
+	mux.Handle("DELETE /api/rooms/{slug}/allowed/{handle}", requireUser(s.removeAllowed))
+	mux.Handle("POST /api/streams", requireUser(s.startStream))
+	mux.Handle("DELETE /api/streams/{id}", requireUser(s.endStream))
+
+	// Media signaling.
+	mux.HandleFunc("POST /whip", s.Gateway.HandleOBSPublish)
+	mux.HandleFunc("POST /api/streams/{id}/whip", s.Gateway.HandleTokenPublish)
+	mux.HandleFunc("POST /api/streams/{id}/whep", s.play)
+	mux.HandleFunc("PATCH /api/media/{stream}/{kind}/{secret}", s.Gateway.HandleSession)
+	mux.HandleFunc("DELETE /api/media/{stream}/{kind}/{secret}", s.Gateway.HandleSession)
 
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not found")
 	})
-	mux.Handle("/", s.web)
+	mux.Handle("/", s.Web)
 
-	// Rejects cross-origin state-changing requests (Sec-Fetch-Site / Origin vs Host).
+	// Rejects cross-origin state-changing requests from browsers
+	// (Sec-Fetch-Site / Origin vs Host); OBS sends neither header.
 	csrf := http.NewCrossOriginProtection()
-	return recoverPanics(logRequests(csrf.Handler(s.sessions.Middleware(mux))))
+	return recoverPanics(logRequests(csrf.Handler(s.Sessions.Middleware(mux))))
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
 
-	h := api.Health{Status: "ok", Database: s.db.SQL.PingContext(ctx) == nil}
-	if info, err := s.media.Info(ctx); err == nil {
+	h := api.Health{Status: "ok", Database: s.DB.SQL.PingContext(ctx) == nil}
+	if info, err := s.MediaMTX.Info(ctx); err == nil {
 		h.MediaMTX = api.MediaMTXHealth{Reachable: true, Version: info.Version}
 	}
 	status := http.StatusOK
@@ -77,12 +124,20 @@ func userJSON(u store.User) api.User {
 	return api.User{ID: u.ID, Handle: u.Handle, DisplayName: u.DisplayName, AvatarURL: u.AvatarURL.String}
 }
 
+// userID returns the signed-in user's ID, or "".
+func userID(r *http.Request) string {
+	if cur, ok := auth.FromContext(r.Context()); ok {
+		return cur.User.ID
+	}
+	return ""
+}
+
 // requireUser answers 401 unless the request has a signed-in user.
 func requireUser(h func(http.ResponseWriter, *http.Request, auth.Current)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cur, ok := auth.FromContext(r.Context())
 		if !ok {
-			writeError(w, http.StatusUnauthorized, "sign in required")
+			writeErrorCode(w, http.StatusUnauthorized, "sign_in_required", "sign in required")
 			return
 		}
 		h(w, r, cur)
@@ -100,6 +155,15 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, api.ErrorResponse{Error: msg})
+}
+
+func writeErrorCode(w http.ResponseWriter, status int, code, msg string) {
+	writeJSON(w, status, api.ErrorResponse{Error: msg, Code: code})
+}
+
+func internalError(w http.ResponseWriter, r *http.Request, err error) {
+	slog.ErrorContext(r.Context(), "request failed", "method", r.Method, "path", r.URL.Path, "err", err)
+	writeError(w, http.StatusInternalServerError, "internal error")
 }
 
 // decodeJSON reads a small JSON body into v, answering 400 on failure.

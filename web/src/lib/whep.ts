@@ -1,115 +1,73 @@
-export type WhepOptions = {
-  url: string;
-  iceServers?: RTCIceServer[];
-  video?: boolean;
-  audio?: boolean;
-  onStateChange?: (state: RTCPeerConnectionState) => void;
-};
+import { ApiError } from '@/api/client';
+import type { ErrorResponse } from '@/api/types.gen';
 
 export type WhepSession = {
   stream: MediaStream;
   peer: RTCPeerConnection;
-  resourceUrl: string;
-  destroy: () => Promise<void>;
+  close: () => Promise<void>;
 };
 
-const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
-  { urls: 'stun:stun.l.google.com:19302' },
-];
+const SDP = 'application/sdp';
+const TRICKLE = 'application/trickle-ice-sdpfrag';
 
-const ICE_FRAGMENT_TYPE = 'application/trickle-ice-sdpfrag';
-const SDP_TYPE = 'application/sdp';
-
-export async function connectWhep({
-  url,
-  iceServers,
-  video = true,
-  audio = true,
-  onStateChange,
-}: WhepOptions): Promise<WhepSession> {
+/**
+ * Plays a stream over WHEP. No STUN server is needed: MediaMTX has a public
+ * address and learns the viewer's address from its connectivity checks.
+ */
+export async function playWhep(url: string, onState?: (s: RTCPeerConnectionState) => void): Promise<WhepSession> {
   if (typeof RTCPeerConnection === 'undefined') {
-    throw new Error('WebRTC is not supported in this browser');
+    throw new Error('This browser does not support WebRTC.');
   }
-
-  const pc = new RTCPeerConnection({ iceServers: iceServers ?? DEFAULT_ICE_SERVERS });
-  if (video) pc.addTransceiver('video', { direction: 'recvonly' });
-  if (audio) pc.addTransceiver('audio', { direction: 'recvonly' });
+  const pc = new RTCPeerConnection();
+  pc.addTransceiver('video', { direction: 'recvonly' });
+  pc.addTransceiver('audio', { direction: 'recvonly' });
 
   const stream = new MediaStream();
-  const onTrack = (ev: RTCTrackEvent) => {
-    stream.addTrack(ev.track);
-  };
-  pc.addEventListener('track', onTrack);
+  pc.addEventListener('track', (ev) => stream.addTrack(ev.track));
+  if (onState) pc.addEventListener('connectionstatechange', () => onState(pc.connectionState));
 
-  if (onStateChange) {
-    pc.addEventListener('connectionstatechange', () => onStateChange(pc.connectionState));
-  }
+  let resource: string | null = null;
+  let closed = false;
+  const pending: string[] = [];
 
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-
-  const postRes = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': SDP_TYPE },
-    body: pc.localDescription?.sdp ?? '',
-    credentials: 'include',
-  });
-  if (!postRes.ok) {
-    pc.close();
-    throw new Error(`WHEP POST failed: ${postRes.status} ${postRes.statusText}`);
-  }
-  const resourceUrl = postRes.headers.get('Location');
-  if (!resourceUrl) {
-    pc.close();
-    throw new Error('WHEP response missing Location header');
-  }
-  const answerSdp = await postRes.text();
-  await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
-
-  let destroyed = false;
-  pc.addEventListener('icecandidate', (ev) => {
-    if (destroyed) return;
-    const fragment =
-      ev.candidate === null
-        ? 'a=end-of-candidates\r\n'
-        : `a=candidate:${ev.candidate.candidate}\r\n`;
-    void trickle(resourceUrl, fragment);
-  });
-
-  async function trickle(target: string, fragment: string): Promise<void> {
-    if (destroyed) return;
+  async function trickle(fragment: string) {
+    if (closed || !resource) return;
     try {
-      const res = await fetch(target, {
-        method: 'PATCH',
-        headers: { 'Content-Type': ICE_FRAGMENT_TYPE },
-        body: fragment,
-        credentials: 'include',
-      });
-      if (!res.ok) {
-        // eslint-disable-next-line no-console
-        console.warn('[whep] trickle PATCH', res.status, res.statusText);
-      }
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.warn('[whep] trickle failed', err);
+      await fetch(resource, { method: 'PATCH', headers: { 'Content-Type': TRICKLE }, body: fragment });
+    } catch {
+      // A lost candidate is not fatal; others or the host candidates suffice.
     }
   }
+  pc.addEventListener('icecandidate', (ev) => {
+    const fragment = ev.candidate ? `a=candidate:${ev.candidate.candidate}\r\n` : 'a=end-of-candidates\r\n';
+    if (resource) void trickle(fragment);
+    else pending.push(fragment);
+  });
+
+  await pc.setLocalDescription(await pc.createOffer());
+  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': SDP }, body: pc.localDescription?.sdp });
+  if (!res.ok) {
+    pc.close();
+    let body: ErrorResponse | null = null;
+    try {
+      body = (await res.json()) as ErrorResponse;
+    } catch {
+      // not JSON
+    }
+    throw new ApiError(res.status, body?.error ?? `Playback failed (${res.status})`, body?.code);
+  }
+  resource = res.headers.get('Location');
+  await pc.setRemoteDescription({ type: 'answer', sdp: await res.text() });
+  for (const f of pending.splice(0)) void trickle(f);
 
   return {
     stream,
     peer: pc,
-    resourceUrl,
-    async destroy() {
-      if (destroyed) return;
-      destroyed = true;
-      try {
-        await fetch(resourceUrl, { method: 'DELETE', credentials: 'include' });
-      } catch (err) {
-        // eslint-disable-next-line no-console
-        console.warn('[whep] DELETE failed', err);
-      }
-      pc.removeEventListener('track', onTrack);
+    async close() {
+      if (closed) return;
+      closed = true;
       pc.close();
+      if (resource) await fetch(resource, { method: 'DELETE' }).catch(() => undefined);
     },
   };
 }

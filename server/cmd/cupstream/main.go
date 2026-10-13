@@ -14,8 +14,12 @@ import (
 
 	"github.com/RAdu2005/cupstream/server/internal/auth"
 	"github.com/RAdu2005/cupstream/server/internal/config"
+	"github.com/RAdu2005/cupstream/server/internal/gateway"
 	"github.com/RAdu2005/cupstream/server/internal/httpapi"
 	"github.com/RAdu2005/cupstream/server/internal/mediamtx"
+	"github.com/RAdu2005/cupstream/server/internal/oauth"
+	"github.com/RAdu2005/cupstream/server/internal/rooms"
+	"github.com/RAdu2005/cupstream/server/internal/seal"
 	"github.com/RAdu2005/cupstream/server/internal/store"
 	"github.com/RAdu2005/cupstream/server/internal/webui"
 )
@@ -43,19 +47,63 @@ func run() error {
 	}
 	defer db.Close()
 
+	sealer, err := seal.New(cfg.SecretKey)
+	if err != nil {
+		return err
+	}
+	if cfg.SecretKeyGenerated {
+		slog.Warn("CUPSTREAM_SECRET_KEY is not set; using a random key, so stored Discord tokens are lost on restart")
+	}
+
 	sessions := auth.NewSessions(db, cfg.SecureCookies())
 	go sessions.CleanupLoop(ctx)
 
-	media := mediamtx.New(cfg.MediaMTXAPI)
+	providers := map[string]oauth.Provider{}
+	callback := func(p string) string { return cfg.PublicURL.JoinPath("api/auth", p, "callback").String() }
+	if cfg.Google.Enabled() {
+		providers[oauth.Google] = oauth.NewGoogle(oauth.GoogleIssuer, cfg.Google.ID, cfg.Google.Secret, callback(oauth.Google))
+	}
+	var discord *auth.DiscordSync
+	if cfg.Discord.Enabled() {
+		p := oauth.NewDiscord(oauth.DiscordWeb, oauth.DiscordAPI, cfg.Discord.ID, cfg.Discord.Secret, callback(oauth.Discord))
+		providers[oauth.Discord] = p
+		discord = auth.NewDiscordSync(db, sealer, p)
+		go discord.SyncLoop(ctx)
+	}
+	if len(providers) == 0 && !cfg.DevLogin {
+		slog.Warn("no sign-in provider is configured: set CUPSTREAM_GOOGLE_* or CUPSTREAM_DISCORD_*")
+	}
+
+	media := mediamtx.New(cfg.MediaMTXAPI, cfg.MediaMTXWebRTC)
 	if info, err := media.Info(ctx); err != nil {
 		slog.Warn("MediaMTX is not reachable yet", "api", cfg.MediaMTXAPI.String(), "err", err)
 	} else {
 		slog.Info("MediaMTX reachable", "version", info.Version)
 	}
 
+	roomService := rooms.New(db)
+	gw := gateway.New(db, media, roomService, cfg.PublicURL)
+	go func() {
+		if err := gw.Run(ctx); err != nil {
+			slog.Error("media gateway stopped", "err", err)
+		}
+	}()
+
 	srv := &http.Server{
-		Addr:              cfg.Addr,
-		Handler:           httpapi.New(cfg, db, sessions, media, webui.Handler()).Handler(),
+		Addr: cfg.Addr,
+		Handler: httpapi.New(httpapi.Deps{
+			Config:    cfg,
+			DB:        db,
+			Sealer:    sealer,
+			Sessions:  sessions,
+			Accounts:  auth.NewAccounts(db, discord),
+			Discord:   discord,
+			Providers: providers,
+			Rooms:     roomService,
+			Gateway:   gw,
+			MediaMTX:  media,
+			Web:       webui.Handler(),
+		}).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 	}

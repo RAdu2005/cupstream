@@ -11,6 +11,12 @@ sql:
         output_models_file_name: models.gen.go
         output_files_suffix: .gen
         emit_empty_slices: true
+        overrides:
+          - { column: room_allowed.can_stream, go_type: bool }
+          - { column: room_passes.can_stream, go_type: bool }
+          - { column: invites.can_stream, go_type: bool }
+          - { column: invites.until_stream_end, go_type: bool }
+          - { column: user_guilds.suggestions_enabled, go_type: bool }
 overrides:
   go:
     rename:

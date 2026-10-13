@@ -174,3 +174,15 @@ func (s *Sessions) CleanupLoop(ctx context.Context) {
 		}
 	}
 }
+
+// List returns the user's unexpired sessions, most recently used first.
+func (s *Sessions) List(ctx context.Context, userID string) ([]store.Session, error) {
+	return s.db.ListSessions(ctx, store.ListSessionsParams{UserID: userID, ExpiresAt: s.now().Unix()})
+}
+
+// Revoke ends one of the user's sessions. It reports false if the session
+// does not exist or belongs to someone else.
+func (s *Sessions) Revoke(ctx context.Context, userID, sessionID string) (bool, error) {
+	n, err := s.db.DeleteUserSession(ctx, store.DeleteUserSessionParams{ID: sessionID, UserID: userID})
+	return n > 0, err
+}

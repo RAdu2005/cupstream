@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/RAdu2005/cupstream/server/internal/oauth"
 	"github.com/RAdu2005/cupstream/server/internal/store"
 )
 
@@ -18,12 +19,9 @@ func TestSessionLifecycle(t *testing.T) {
 	}
 	defer db.Close()
 
-	user, err := SignIn(ctx, db, Identity{Provider: ProviderDev, Subject: "alice", Username: "alice", Handle: "alice", DisplayName: "Alice"})
+	user, _, err := NewAccounts(db, nil).SignIn(ctx, oauth.Identity{Provider: ProviderDev, Subject: "alice", Username: "alice", DisplayName: "Alice"})
 	if err != nil {
 		t.Fatal(err)
-	}
-	if _, err := SignIn(ctx, db, Identity{Provider: "google", Subject: "1", Handle: "ALICE", DisplayName: "Other"}); err != ErrHandleTaken {
-		t.Fatalf("duplicate handle: got %v, want ErrHandleTaken", err)
 	}
 
 	now := time.Unix(1_800_000_000, 0)
@@ -71,6 +69,38 @@ func TestSessionLifecycle(t *testing.T) {
 	}
 	if n, err := db.DeleteExpiredSessions(ctx, now.Unix()); err != nil || n != 1 {
 		t.Fatalf("cleanup deleted %d sessions, err %v", n, err)
+	}
+}
+
+func TestListAndRevoke(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	acc := NewAccounts(db, nil)
+	alice, _, _ := acc.SignIn(ctx, oauth.Identity{Provider: ProviderDev, Subject: "alice", Username: "alice"})
+	bob, _, _ := acc.SignIn(ctx, oauth.Identity{Provider: ProviderDev, Subject: "bob", Username: "bob"})
+
+	s := NewSessions(db, false)
+	for range 2 {
+		if err := s.Start(ctx, httptest.NewRecorder(), alice.ID, KindWeb, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list, err := s.List(ctx, alice.ID)
+	if err != nil || len(list) != 2 {
+		t.Fatalf("List = %d sessions, %v", len(list), err)
+	}
+	if ok, _ := s.Revoke(ctx, bob.ID, list[0].ID); ok {
+		t.Fatal("bob revoked alice's session")
+	}
+	if ok, _ := s.Revoke(ctx, alice.ID, list[0].ID); !ok {
+		t.Fatal("alice could not revoke her session")
+	}
+	if list, _ := s.List(ctx, alice.ID); len(list) != 1 {
+		t.Fatalf("%d sessions left, want 1", len(list))
 	}
 }
 

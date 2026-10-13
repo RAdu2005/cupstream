@@ -1,4 +1,4 @@
-import { CupSoda, LogOut } from 'lucide-react';
+import { CupSoda, LogOut, Settings } from 'lucide-react';
 import { Link, Outlet, useNavigate } from 'react-router';
 import { useLogout, useMe } from '@/api/auth';
 import { Button } from './ui';
@@ -28,17 +28,21 @@ function UserMenu() {
   if (isPending) return null;
   if (!user) {
     return (
-      <Button variant="secondary" onClick={() => navigate('/login')}>
+      <Button variant="secondary" onClick={() => navigate(`/login?next=${encodeURIComponent(window.location.pathname)}`)}>
         Sign in
       </Button>
     );
   }
   return (
     <div className="flex items-center gap-3">
-      <span className="text-sm">
-        <span className="font-semibold">{user.displayName}</span>{' '}
-        <span className="text-muted">@{user.handle}</span>
+      <span className="flex items-center gap-2 text-sm">
+        {user.avatarUrl && <img src={user.avatarUrl} alt="" className="size-6 rounded-full" />}
+        <span className="font-semibold">{user.displayName}</span>
+        <span className="hidden text-muted sm:inline">@{user.handle}</span>
       </span>
+      <Link to="/settings" aria-label="Settings" title="Settings" className="rounded-md p-2 text-muted hover:bg-raised hover:text-fg">
+        <Settings className="size-4" aria-hidden />
+      </Link>
       <Button
         variant="ghost"
         aria-label="Sign out"
