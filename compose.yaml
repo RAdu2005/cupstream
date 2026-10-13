@@ -7,11 +7,16 @@
 services:
   mediamtx:
     build: deploy/mediamtx
-    image: cupstream-mediamtx:v1.21.2-cupstream.1
+    image: cupstream-mediamtx:v1.21.2-cupstream.3
     network_mode: host
     restart: unless-stopped
     environment:
       MTX_WEBRTCADDITIONALHOSTS: ${MTX_WEBRTCADDITIONALHOSTS:-}
+      # Collect garbage less often: MediaMTX allocates for every packet, and
+      # the server has memory to spare (an upstream measurement: 64% of a
+      # core at the default against 38% at GOGC=800).
+      GOGC: ${MTX_GOGC:-800}
+      GOMEMLIMIT: ${MTX_GOMEMLIMIT:-16GiB}
 
   cupstream:
     build: .

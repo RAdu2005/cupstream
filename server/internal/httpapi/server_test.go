@@ -169,7 +169,7 @@ func TestHealth(t *testing.T) {
 	b := newTestEnv(t, envOptions{}).browser(t)
 	r := b.do("GET", "/healthz", "")
 	h := decode[api.Health](t, r.body)
-	if r.status != 200 || h.Status != "ok" || !h.Database || h.MediaMTX.Version != "v1.21.2-cupstream.1" {
+	if r.status != 200 || h.Status != "ok" || !h.Database || h.MediaMTX.Version != "v1.21.2-cupstream.2" || !h.MediaMTX.Pause || !h.MediaMTX.Events {
 		t.Fatalf("got %d %+v", r.status, h)
 	}
 

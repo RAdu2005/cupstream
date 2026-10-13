@@ -85,9 +85,18 @@ function StreamTile({ stream, room }: { stream: Stream; room: RoomData }) {
           )}
         </div>
       </div>
+      {me?.id === stream.user.id && stream.source === 'obs' && (stream.keyFrameInterval ?? 0) > slowKeyFrames && (
+        <p className="text-sm text-muted">
+          Your keyframe interval is about {Math.round(stream.keyFrameInterval ?? 0)} seconds, so new viewers wait that
+          long for the picture. Set it to 1–2 seconds in OBS (Settings, Output, Keyframe Interval).
+        </p>
+      )}
     </div>
   );
 }
+
+// OBS ignores requests for keyframes, so its interval is what new viewers wait.
+const slowKeyFrames = 3;
 
 const sourceLabel: Record<Stream['source'], string> = { app: 'app', web: 'browser', obs: 'OBS' };
 

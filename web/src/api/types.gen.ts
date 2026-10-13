@@ -50,6 +50,12 @@ export interface Health {
 export interface MediaMTXHealth {
   reachable: boolean;
   version?: string;
+  /**
+   * Features of CupStream's MediaMTX build; without them the server closes
+   * sessions instead of pausing them and polls instead of following events.
+   */
+  pause: boolean;
+  events: boolean;
 }
 /**
  * ErrorResponse is the body of every non-2xx JSON response.
@@ -155,7 +161,32 @@ export interface Stream {
   source: 'app' | 'web' | 'obs';
   state: 'starting' | 'live' | 'reconnecting';
   startedAt: number /* int64 */;
+  /**
+   * Viewers counts sessions receiving media; paused ones do not count.
+   */
   viewers: number /* int */;
+  /**
+   * Bitrate the server receives from the streamer, in bits per second.
+   */
+  bitrate: number /* int64 */;
+  /**
+   * LossRatio of the streamer's packets on the way to the server (0-1).
+   */
+  lossRatio: number /* float64 */;
+  /**
+   * KeyFrameInterval is the longest recent interval between key frames,
+   * in seconds, when known. OBS ignores requests for key frames, so new
+   * viewers of an OBS stream wait up to this long for the picture.
+   */
+  keyFrameInterval?: number /* float64 */;
+}
+/**
+ * PauseTracks is the optional body of POST /api/media/{stream}/whep/{secret}/pause
+ * and .../resume. Without it, video and audio are both selected.
+ */
+export interface PauseTracks {
+  video?: boolean;
+  audio?: boolean;
 }
 /**
  * Room is the response of GET /api/rooms/{slug}.

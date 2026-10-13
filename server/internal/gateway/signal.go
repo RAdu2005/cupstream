@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"crypto/subtle"
 	"database/sql"
@@ -9,16 +10,19 @@ import (
 	"io"
 	"log/slog"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"path"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/RAdu2005/cupstream/server/internal/access"
 	"github.com/RAdu2005/cupstream/server/internal/api"
 	"github.com/RAdu2005/cupstream/server/internal/auth"
+	"github.com/RAdu2005/cupstream/server/internal/mediamtx"
 	"github.com/RAdu2005/cupstream/server/internal/store"
 )
 
@@ -136,6 +140,26 @@ func (g *Gateway) Play(w http.ResponseWriter, r *http.Request, userID string) {
 	g.forwardOffer(w, r, ls.Stream, false, userID)
 }
 
+// playQuery reads ?paused=true and ?preview=false from a WHEP request: a
+// pre-warmed session opens paused, and without a preview frame it sends
+// nothing until resumed.
+func playQuery(r *http.Request) (paused, noPreview bool, err error) {
+	q := r.URL.Query()
+	if v := q.Get("paused"); v != "" {
+		if paused, err = strconv.ParseBool(v); err != nil {
+			return false, false, errors.New("paused is true or false")
+		}
+	}
+	if v := q.Get("preview"); v != "" {
+		preview, err := strconv.ParseBool(v)
+		if err != nil {
+			return false, false, errors.New("preview is true or false")
+		}
+		noPreview = !preview
+	}
+	return paused, noPreview, nil
+}
+
 // forwardOffer relays a WHIP/WHEP offer to MediaMTX, records the session and
 // answers with a Location on this server. It reports whether it succeeded.
 func (g *Gateway) forwardOffer(w http.ResponseWriter, r *http.Request, rec store.Stream, publish bool, userID string) bool {
@@ -154,6 +178,26 @@ func (g *Gateway) forwardOffer(w http.ResponseWriter, r *http.Request, rec store
 	}
 	offer := string(body)
 	kind := "whep"
+	query := url.Values{"u": {userID}}
+	var paused Tracks
+	if !publish {
+		p, noPreview, err := playQuery(r)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "", err.Error())
+			return false
+		}
+		if p {
+			if !g.Features().Pause {
+				writeErr(w, http.StatusNotImplemented, "pause_unsupported", errPauseUnsupported.Error())
+				return false
+			}
+			paused = mediamtx.AllTracks
+			query.Set("paused", "true")
+			if noPreview {
+				query.Set("preview", "false")
+			}
+		}
+	}
 	if publish {
 		kind = "whip"
 		if offer, err = filterPublishOffer(offer); err != nil {
@@ -162,8 +206,16 @@ func (g *Gateway) forwardOffer(w http.ResponseWriter, r *http.Request, rec store
 		}
 	}
 
-	resp, err := g.mtx.Signal(r.Context(), http.MethodPost, mtxPath(rec.ID)+"/"+kind,
-		url.Values{"u": {userID}}, http.Header{"Content-Type": {sdpType}}, strings.NewReader(offer))
+	header := http.Header{"Content-Type": {sdpType}, "X-Forwarded-For": {clientIP(r)}}
+	signal := func() (*http.Response, error) {
+		return g.mtx.Signal(r.Context(), http.MethodPost, mtxPath(rec.ID)+"/"+kind, query, header, strings.NewReader(offer))
+	}
+	var resp *http.Response
+	if publish {
+		resp, err = g.replacePublisher(r.Context(), rec.ID, signal)
+	} else {
+		resp, err = signal()
+	}
 	if err != nil {
 		slog.ErrorContext(r.Context(), "mediamtx unreachable", "err", err)
 		writeErr(w, http.StatusBadGateway, "", "the media server is unavailable")
@@ -192,9 +244,7 @@ func (g *Gateway) forwardOffer(w http.ResponseWriter, r *http.Request, rec store
 		return false
 	}
 
-	g.mu.Lock()
-	g.sessions[mtxID] = &session{mtxID: mtxID, secret: secret, streamID: rec.ID, publish: publish, userID: userID, created: g.now()}
-	g.mu.Unlock()
+	g.addSession(&session{mtxID: mtxID, secret: secret, streamID: rec.ID, publish: publish, userID: userID, created: g.now(), paused: paused})
 
 	h := w.Header()
 	h.Set("Content-Type", sdpType)
@@ -212,6 +262,79 @@ func (g *Gateway) forwardOffer(w http.ResponseWriter, r *http.Request, rec store
 	w.WriteHeader(http.StatusCreated)
 	w.Write(answer)
 	return true
+}
+
+// publisherRetries bounds how long a new publisher waits for MediaMTX to
+// let go of the one it replaces.
+const publisherRetries = 10
+
+// replacePublisher forwards a WHIP offer for a stream that may still have a
+// publisher, such as OBS reconnecting before MediaMTX noticed that its old
+// connection died. MediaMTX refuses a second publisher (overridePublisher
+// is off, so nothing else can take over a path), so the old one is closed
+// first, and again if MediaMTX still reports it.
+func (g *Gateway) replacePublisher(ctx context.Context, streamID string, signal func() (*http.Response, error)) (*http.Response, error) {
+	g.closePublishers(ctx, streamID, nil)
+	for attempt := 1; ; attempt++ {
+		resp, err := signal()
+		if err != nil || resp.StatusCode != http.StatusBadRequest || attempt == publisherRetries {
+			return resp, err
+		}
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		resp.Body.Close()
+		if err != nil {
+			return nil, err
+		}
+		if !strings.Contains(string(body), "already publishing") {
+			resp.Body = io.NopCloser(bytes.NewReader(body))
+			return resp, nil
+		}
+		mtxSessions, err := g.mtx.WebRTCSessions(ctx)
+		if err != nil {
+			return nil, err
+		}
+		g.closePublishers(ctx, streamID, mtxSessions)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(time.Duration(attempt) * 50 * time.Millisecond):
+		}
+	}
+}
+
+// closePublishers closes the publishing sessions of a stream: the ones the
+// gateway knows and, when given, the ones in MediaMTX's list.
+func (g *Gateway) closePublishers(ctx context.Context, streamID string, listed []mediamtx.Session) {
+	ids := map[string]bool{}
+	g.mu.Lock()
+	for id, sess := range g.sessions {
+		if sess.streamID == streamID && sess.publish {
+			ids[id] = true
+			delete(g.sessions, id)
+		}
+	}
+	g.mu.Unlock()
+	for _, ms := range listed {
+		if ms.Path == mtxPath(streamID) && ms.State == "publish" {
+			ids[ms.ID] = true
+		}
+	}
+	for id := range ids {
+		slog.InfoContext(ctx, "closing the previous publisher", "stream", streamID, "id", id)
+		if err := g.mtx.Kick(ctx, id); err != nil {
+			slog.WarnContext(ctx, "kick failed", "id", id, "err", err)
+		}
+	}
+}
+
+// clientIP is the address of the client, passed to MediaMTX as
+// X-Forwarded-For so that its logs and session list show real clients.
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 // sessionURL is the absolute URL of a session resource on this server, built

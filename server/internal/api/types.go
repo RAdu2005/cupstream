@@ -37,6 +37,10 @@ type Health struct {
 type MediaMTXHealth struct {
 	Reachable bool   `json:"reachable"`
 	Version   string `json:"version,omitempty"`
+	// Features of CupStream's MediaMTX build; without them the server closes
+	// sessions instead of pausing them and polls instead of following events.
+	Pause  bool `json:"pause"`
+	Events bool `json:"events"`
 }
 
 // ErrorResponse is the body of every non-2xx JSON response.
@@ -133,7 +137,23 @@ type Stream struct {
 	Source    string `json:"source" tstype:"'app' | 'web' | 'obs'"`
 	State     string `json:"state" tstype:"'starting' | 'live' | 'reconnecting'"`
 	StartedAt int64  `json:"startedAt"`
-	Viewers   int    `json:"viewers"`
+	// Viewers counts sessions receiving media; paused ones do not count.
+	Viewers int `json:"viewers"`
+	// Bitrate the server receives from the streamer, in bits per second.
+	Bitrate int64 `json:"bitrate"`
+	// LossRatio of the streamer's packets on the way to the server (0-1).
+	LossRatio float64 `json:"lossRatio"`
+	// KeyFrameInterval is the longest recent interval between key frames,
+	// in seconds, when known. OBS ignores requests for key frames, so new
+	// viewers of an OBS stream wait up to this long for the picture.
+	KeyFrameInterval float64 `json:"keyFrameInterval,omitempty"`
+}
+
+// PauseTracks is the optional body of POST /api/media/{stream}/whep/{secret}/pause
+// and .../resume. Without it, video and audio are both selected.
+type PauseTracks struct {
+	Video *bool `json:"video,omitempty"`
+	Audio *bool `json:"audio,omitempty"`
 }
 
 // Room is the response of GET /api/rooms/{slug}.

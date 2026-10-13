@@ -86,6 +86,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/streams/{id}/whep", s.play)
 	mux.HandleFunc("PATCH /api/media/{stream}/{kind}/{secret}", s.Gateway.HandleSession)
 	mux.HandleFunc("DELETE /api/media/{stream}/{kind}/{secret}", s.Gateway.HandleSession)
+	mux.HandleFunc("POST /api/media/{stream}/whep/{secret}/{action}", s.Gateway.HandleSessionControl)
 
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not found")
@@ -104,7 +105,8 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 
 	h := api.Health{Status: "ok", Database: s.DB.SQL.PingContext(ctx) == nil}
 	if info, err := s.MediaMTX.Info(ctx); err == nil {
-		h.MediaMTX = api.MediaMTXHealth{Reachable: true, Version: info.Version}
+		f := mediamtx.FeaturesOf(info.Version)
+		h.MediaMTX = api.MediaMTXHealth{Reachable: true, Version: info.Version, Pause: f.Pause, Events: f.Events}
 	}
 	status := http.StatusOK
 	if !h.Database || !h.MediaMTX.Reachable {

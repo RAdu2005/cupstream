@@ -2,8 +2,10 @@
 // request passes through it to MediaMTX, which listens on localhost only.
 //
 // The gateway decides access, gives each stream its own MediaMTX path
-// (s/<streamId>), records every session so it can end it when access
-// changes, and reconciles live state with MediaMTX's API every two seconds.
+// (s/<streamId>) and records every session so it can pause or end it when
+// access changes. It follows MediaMTX's event stream for live state,
+// re-synchronizing with one list call after each (re)connection, and polls
+// every two seconds when the event stream is unavailable.
 package gateway
 
 import (
@@ -28,12 +30,23 @@ import (
 
 const (
 	reconcileInterval = 2 * time.Second
+	// While following events, timeouts are checked this often (no API calls).
+	expireInterval = time.Second
+	// How often a build without the event stream is checked for an upgrade.
+	featuresInterval = 30 * time.Second
+	// How long to poll after the event stream drops before reconnecting.
+	eventsRetryDelay = 5 * time.Second
 	// A stream whose publisher has not connected after this long is dropped.
 	startTimeout = 30 * time.Second
 	// A stream whose publisher disconnected is kept this long for reconnects.
 	reconnectGrace = 15 * time.Second
 	// A session MediaMTX has never listed is forgotten after this long.
 	sessionHandshakeTimeout = 30 * time.Second
+	// A viewer held because they lost access is disconnected after this long,
+	// unless they get access back first.
+	holdTimeout = 2 * time.Minute
+	// Session events that arrive before the WHIP/WHEP answer are kept this long.
+	earlyEventTTL = time.Minute
 )
 
 type Source string
@@ -68,6 +81,7 @@ type liveStream struct {
 	state State
 	since time.Time // when the current state began
 	peak  int
+	stats streamStats
 }
 
 type session struct {
@@ -77,7 +91,26 @@ type session struct {
 	publish   bool
 	userID    string // viewer ("" for anonymous) or publisher
 	created   time.Time
-	confirmed bool // seen in MediaMTX's session list
+	confirmed bool // seen in MediaMTX's session list or event stream
+
+	// Viewers only.
+	paused mediamtx.Tracks // tracks the viewer paused
+	held   bool            // paused by the server: the viewer lost access
+	heldAt time.Time
+	stats  sessionStats
+}
+
+// watching reports whether a viewer receives media: not held, and not
+// paused entirely (a pre-warmed or background session is not a viewer).
+func (s *session) watching() bool {
+	return !s.publish && !s.held && !(s.paused.Video && s.paused.Audio)
+}
+
+// earlyEvent is a session event that arrived before the gateway recorded
+// the session: MediaMTX announces a session before answering its request.
+type earlyEvent struct {
+	at     time.Time
+	closed bool
 }
 
 // LiveStream is a snapshot of a stream for API responses.
@@ -85,6 +118,7 @@ type LiveStream struct {
 	Stream  store.Stream
 	State   State
 	Viewers int
+	Stats   StreamStats
 }
 
 type Gateway struct {
@@ -95,8 +129,14 @@ type Gateway struct {
 	now       func() time.Time
 
 	mu       sync.Mutex
+	features mediamtx.Features
 	streams  map[string]*liveStream // by stream ID
 	sessions map[string]*session    // by MediaMTX session ID
+	early    map[string]earlyEvent  // by MediaMTX session ID
+
+	// pauseMu serializes pause and resume calls, which read and change a
+	// session's pause state around a MediaMTX request.
+	pauseMu sync.Mutex
 }
 
 func New(db *store.DB, mtx *mediamtx.Client, rs *rooms.Service, publicURL *url.URL) *Gateway {
@@ -104,6 +144,7 @@ func New(db *store.DB, mtx *mediamtx.Client, rs *rooms.Service, publicURL *url.U
 		db: db, mtx: mtx, rooms: rs, publicURL: publicURL, now: time.Now,
 		streams:  map[string]*liveStream{},
 		sessions: map[string]*session{},
+		early:    map[string]earlyEvent{},
 	}
 }
 
@@ -119,12 +160,55 @@ func newStreamID() string {
 	return strings.ToLower(idEncoding.EncodeToString(b))
 }
 
-// Run restores streams that were live before a restart and reconciles with
+// Features returns what the running MediaMTX build supports.
+func (g *Gateway) Features() mediamtx.Features {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.features
+}
+
+// DetectFeatures asks MediaMTX for its version and enables the features of
+// that build. It keeps the previous features when MediaMTX is unreachable.
+func (g *Gateway) DetectFeatures(ctx context.Context) {
+	info, err := g.mtx.Info(ctx)
+	if err != nil {
+		return
+	}
+	f := mediamtx.FeaturesOf(info.Version)
+	g.mu.Lock()
+	changed := f != g.features
+	g.features = f
+	g.mu.Unlock()
+	if changed {
+		slog.Info("MediaMTX features", "version", info.Version, "pause", f.Pause, "events", f.Events)
+	}
+}
+
+// Run restores streams that were live before a restart and follows
 // MediaMTX until ctx is done.
 func (g *Gateway) Run(ctx context.Context) error {
 	if err := g.Restore(ctx); err != nil {
 		return err
 	}
+	for ctx.Err() == nil {
+		g.DetectFeatures(ctx)
+		if !g.Features().Events {
+			g.poll(ctx, featuresInterval)
+			continue
+		}
+		err := g.follow(ctx)
+		if ctx.Err() != nil {
+			break
+		}
+		slog.Warn("MediaMTX event stream ended; polling until it reconnects", "err", err)
+		g.poll(ctx, eventsRetryDelay)
+	}
+	return nil
+}
+
+// poll reconciles every two seconds for d.
+func (g *Gateway) poll(ctx context.Context, d time.Duration) {
+	stop := time.After(d)
 	t := time.NewTicker(reconcileInterval)
 	defer t.Stop()
 	for {
@@ -133,14 +217,57 @@ func (g *Gateway) Run(ctx context.Context) error {
 		}
 		select {
 		case <-ctx.Done():
-			return nil
+			return
+		case <-stop:
+			return
 		case <-t.C:
 		}
 	}
 }
 
+// follow applies MediaMTX's events until the stream ends. Timeouts are
+// checked locally and statistics refreshed while there are streams.
+func (g *Gateway) follow(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	synced := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			return
+		case <-synced:
+		}
+		expire := time.NewTicker(expireInterval)
+		defer expire.Stop()
+		stats := time.NewTicker(reconcileInterval)
+		defer stats.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-expire.C:
+				g.expire(ctx)
+			case <-stats.C:
+				if err := g.RefreshStats(ctx); err != nil && ctx.Err() == nil {
+					slog.Warn("media statistics failed", "err", err)
+				}
+			}
+		}
+	}()
+
+	var once sync.Once
+	return g.mtx.Events(ctx, func() {
+		// Subscribed: list the current state once; later changes arrive as events.
+		if err := g.Reconcile(ctx); err != nil && ctx.Err() == nil {
+			slog.Warn("media reconcile failed", "err", err)
+		}
+		once.Do(func() { close(synced) })
+	}, func(e mediamtx.Event) { g.HandleEvent(ctx, e) })
+}
+
 // Restore loads the streams that were active before a restart. They count as
-// reconnecting until the next Reconcile finds them online in MediaMTX.
+// reconnecting until MediaMTX reports them online.
 func (g *Gateway) Restore(ctx context.Context) error {
 	active, err := g.db.ListActiveStreams(ctx)
 	if err != nil {
@@ -162,8 +289,19 @@ type ending struct {
 	peak       int
 }
 
-// Reconcile updates live state from MediaMTX: streams go live, start their
-// reconnect grace period or end, and sessions are matched with MediaMTX's.
+// setOnlineLocked moves a stream between live and reconnecting.
+func (g *Gateway) setOnlineLocked(s *liveStream, up bool, now time.Time) {
+	switch {
+	case up && s.state != Live:
+		s.state, s.since = Live, now
+	case !up && s.state == Live:
+		s.state, s.since = Reconnecting, now
+	}
+}
+
+// Reconcile re-synchronizes with MediaMTX's lists: streams go live or start
+// their reconnect grace period, sessions are matched with MediaMTX's, and
+// timeouts are applied.
 func (g *Gateway) Reconcile(ctx context.Context) error {
 	paths, err := g.mtx.Paths(ctx)
 	if err != nil {
@@ -179,22 +317,11 @@ func (g *Gateway) Reconcile(ctx context.Context) error {
 	}
 
 	now := g.now()
-	var ends []ending
 	var kicks []string
 
 	g.mu.Lock()
 	for id, s := range g.streams {
-		up := online[mtxPath(id)]
-		switch {
-		case up && s.state != Live:
-			s.state, s.since = Live, now
-		case !up && s.state == Live:
-			s.state, s.since = Reconnecting, now
-		case !up && s.state == Starting && now.Sub(s.since) > startTimeout:
-			ends = append(ends, ending{id, EndFailedToStart, s.peak})
-		case !up && s.state == Reconnecting && now.Sub(s.since) > reconnectGrace:
-			ends = append(ends, ending{id, EndDisconnected, s.peak})
-		}
+		g.setOnlineLocked(s, online[mtxPath(id)], now)
 	}
 
 	present := map[string]bool{}
@@ -214,6 +341,9 @@ func (g *Gateway) Reconcile(ctx context.Context) error {
 		g.sessions[ms.ID] = &session{
 			mtxID: ms.ID, streamID: streamID, publish: ms.State == "publish",
 			userID: q.Get("u"), created: ms.Created, confirmed: true,
+			// After a restart a held viewer looks paused by themselves; resuming
+			// checks access again, so they cannot resume without it.
+			paused: mediamtx.Tracks{Video: ms.VideoPaused, Audio: ms.AudioPaused},
 		}
 	}
 	for id, sess := range g.sessions {
@@ -221,11 +351,8 @@ func (g *Gateway) Reconcile(ctx context.Context) error {
 			delete(g.sessions, id)
 		}
 	}
-	for id, n := range g.viewerCountsLocked() {
-		if s := g.streams[id]; s != nil && n > s.peak {
-			s.peak = n
-		}
-	}
+	g.applyStatsLocked(paths, mtxSessions, now)
+	g.updatePeaksLocked()
 	g.mu.Unlock()
 
 	for _, id := range kicks {
@@ -234,20 +361,113 @@ func (g *Gateway) Reconcile(ctx context.Context) error {
 			slog.Warn("kick failed", "id", id, "err", err)
 		}
 	}
+	g.expire(ctx)
+	return nil
+}
+
+// HandleEvent applies one event from MediaMTX's event stream.
+func (g *Gateway) HandleEvent(ctx context.Context, e mediamtx.Event) {
+	now := g.now()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	switch e.Type {
+	case mediamtx.EventStreamOnline, mediamtx.EventStreamOffline:
+		id, ok := streamIDFromPath(e.Path)
+		if s := g.streams[id]; ok && s != nil {
+			g.setOnlineLocked(s, e.Type == mediamtx.EventStreamOnline, now)
+		}
+	case mediamtx.EventSessionCreated:
+		id := e.SessionID()
+		if sess, ok := g.sessions[id]; ok {
+			sess.confirmed = true
+		} else if id != "" {
+			g.early[id] = earlyEvent{at: now}
+		}
+	case mediamtx.EventSessionClosed:
+		id := e.SessionID()
+		if _, ok := g.sessions[id]; ok {
+			delete(g.sessions, id)
+			g.updatePeaksLocked()
+		} else if id != "" {
+			g.early[id] = earlyEvent{at: now, closed: true}
+		}
+	}
+}
+
+// addSession records a session MediaMTX just created, unless its events
+// already said that it closed.
+func (g *Gateway) addSession(sess *session) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if ev, ok := g.early[sess.mtxID]; ok {
+		delete(g.early, sess.mtxID)
+		if ev.closed {
+			return
+		}
+		sess.confirmed = true
+	}
+	g.sessions[sess.mtxID] = sess
+	g.updatePeaksLocked()
+}
+
+// expire ends streams that never started or did not reconnect in time,
+// forgets sessions that never appeared and disconnects viewers held too long.
+func (g *Gateway) expire(ctx context.Context) {
+	now := g.now()
+	var ends []ending
+	var kicks []string
+
+	g.mu.Lock()
+	for id, s := range g.streams {
+		switch {
+		case s.state == Starting && now.Sub(s.since) > startTimeout:
+			ends = append(ends, ending{id, EndFailedToStart, s.peak})
+		case s.state == Reconnecting && now.Sub(s.since) > reconnectGrace:
+			ends = append(ends, ending{id, EndDisconnected, s.peak})
+		}
+	}
+	for id, sess := range g.sessions {
+		switch {
+		case !sess.confirmed && now.Sub(sess.created) > sessionHandshakeTimeout:
+			delete(g.sessions, id)
+		case sess.held && now.Sub(sess.heldAt) > holdTimeout:
+			delete(g.sessions, id)
+			kicks = append(kicks, id)
+		}
+	}
+	for id, ev := range g.early {
+		if now.Sub(ev.at) > earlyEventTTL {
+			delete(g.early, id)
+		}
+	}
+	g.mu.Unlock()
+
+	for _, id := range kicks {
+		if err := g.mtx.Kick(ctx, id); err != nil {
+			slog.Warn("kick failed", "id", id, "err", err)
+		}
+	}
 	for _, e := range ends {
 		g.finish(ctx, e)
 	}
-	return nil
 }
 
 func (g *Gateway) viewerCountsLocked() map[string]int {
 	counts := map[string]int{}
 	for _, s := range g.sessions {
-		if !s.publish {
+		if s.watching() {
 			counts[s.streamID]++
 		}
 	}
 	return counts
+}
+
+func (g *Gateway) updatePeaksLocked() {
+	for id, n := range g.viewerCountsLocked() {
+		if s := g.streams[id]; s != nil && n > s.peak {
+			s.peak = n
+		}
+	}
 }
 
 // EndStream ends a stream: its publisher and viewers are disconnected.
@@ -300,10 +520,14 @@ func (g *Gateway) finish(ctx context.Context, e ending) {
 }
 
 // Reevaluate applies a change to room's access rules: viewers who may no
-// longer watch are disconnected, and streams whose streamer may no longer
-// stream there are ended.
+// longer watch are held (paused, and disconnected after two minutes) and
+// get their media back if they regain access in the meantime; streams whose
+// streamer may no longer stream there are ended.
 func (g *Gateway) Reevaluate(ctx context.Context, room store.Room) {
-	type viewer struct{ mtxID, userID string }
+	type viewer struct {
+		mtxID, userID string
+		held          bool
+	}
 	var viewers []viewer
 	streamers := map[string]string{} // stream ID -> user ID
 	g.mu.Lock()
@@ -314,7 +538,7 @@ func (g *Gateway) Reevaluate(ctx context.Context, room store.Room) {
 	}
 	for id, sess := range g.sessions {
 		if _, inRoom := streamers[sess.streamID]; inRoom && !sess.publish {
-			viewers = append(viewers, viewer{id, sess.userID})
+			viewers = append(viewers, viewer{id, sess.userID, sess.held})
 		}
 	}
 	g.mu.Unlock()
@@ -340,8 +564,11 @@ func (g *Gateway) Reevaluate(ctx context.Context, room store.Room) {
 			ok = allowed(v.userID, access.Watch)
 			canWatch[v.userID] = ok
 		}
-		if !ok {
-			g.kickSession(ctx, v.mtxID)
+		switch {
+		case !ok && !v.held:
+			g.hold(ctx, v.mtxID)
+		case ok && v.held:
+			g.release(ctx, v.mtxID)
 		}
 	}
 }
@@ -366,6 +593,10 @@ func (g *Gateway) kickSession(ctx context.Context, mtxID string) {
 	}
 }
 
+func (g *Gateway) snapshotLocked(id string, s *liveStream, counts map[string]int) LiveStream {
+	return LiveStream{Stream: s.rec, State: s.state, Viewers: counts[id], Stats: s.stats.public()}
+}
+
 // RoomStreams lists the active streams of a room, oldest first.
 func (g *Gateway) RoomStreams(roomID string) []LiveStream {
 	g.mu.Lock()
@@ -374,7 +605,7 @@ func (g *Gateway) RoomStreams(roomID string) []LiveStream {
 	var out []LiveStream
 	for id, s := range g.streams {
 		if s.rec.RoomID == roomID {
-			out = append(out, LiveStream{Stream: s.rec, State: s.state, Viewers: counts[id]})
+			out = append(out, g.snapshotLocked(id, s, counts))
 		}
 	}
 	slicesSortByStart(out)
@@ -389,7 +620,7 @@ func (g *Gateway) Stream(streamID string) (LiveStream, bool) {
 	if !ok {
 		return LiveStream{}, false
 	}
-	return LiveStream{Stream: s.rec, State: s.state, Viewers: g.viewerCountsLocked()[streamID]}, true
+	return g.snapshotLocked(streamID, s, g.viewerCountsLocked()), true
 }
 
 func (g *Gateway) activeStreamOf(userID string) *store.Stream {

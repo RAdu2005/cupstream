@@ -124,6 +124,8 @@ func streamJSON(ctx context.Context, users *userCache, ls gateway.LiveStream) (a
 	return api.Stream{
 		ID: ls.Stream.ID, User: u, Source: ls.Stream.Source, State: string(ls.State),
 		StartedAt: ls.Stream.StartedAt, Viewers: ls.Viewers,
+		Bitrate: ls.Stats.Bitrate, LossRatio: ls.Stats.LossRatio,
+		KeyFrameInterval: ls.Stats.KeyFrameInterval.Seconds(),
 	}, err
 }
 

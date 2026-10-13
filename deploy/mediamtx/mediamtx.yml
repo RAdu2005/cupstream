@@ -8,14 +8,25 @@
 
 logLevel: info
 
-# Every HTTP request (WHIP, WHEP, API) must come from this machine.
+# The UDP socket that all viewers share gets a larger send buffer, so that
+# key frames going out to many viewers at once do not block it. Linux caps
+# it at net.core.wmem_max, which has to be raised on the host (see README).
+udpWriteBufferSize: 8388608
+
+# WHIP and WHEP requests reach the WebRTC listener, which listens on
+# 127.0.0.1 only, through the CupStream server; it passes the client's
+# address in X-Forwarded-For, which MediaMTX then treats as the request's
+# IP, so that rule cannot be IP-based. The API must come from this machine.
 authMethod: internal
 authInternalUsers:
   - user: any
-    ips: ['127.0.0.1/32', '::1/128']
+    ips: []
     permissions:
       - action: publish
       - action: read
+  - user: any
+    ips: ['127.0.0.1/32', '::1/128']
+    permissions:
       - action: api
 
 api: true
@@ -29,6 +40,17 @@ webrtcLocalTCPAddress: :8189
 webrtcIPsFromInterfaces: true
 webrtcAdditionalHosts: []
 webrtcICEServers2: []
+webrtcTrustedProxies: ['127.0.0.1/32', '::1/128']
+# How often WebRTC publishers are asked for a key frame. Joining, resuming
+# and lost frames ask straight away; this is a fallback.
+webrtcKeyFrameRequestPeriod: 2s
+# Only the CupStream server pauses and resumes viewers, through the API: a
+# viewer holding a session URL must not resume a session the server paused.
+webrtcAllowPausePatch: false
+# A backstop for paused sessions the CupStream server forgot. The server
+# itself disconnects held viewers after 2 minutes; viewers' own pauses
+# (background tiles, pre-warmed streams) may last longer.
+webrtcPausedTimeout: 30m
 
 # CupStream is WebRTC-only.
 rtsp: false
@@ -43,3 +65,9 @@ pprof: false
 paths:
   # Stream paths (s/<streamId>) are created by publishing to them.
   all_others:
+    # A second publisher is refused instead of replacing the first; the
+    # CupStream server closes the old one itself when a sender reconnects.
+    overridePublisher: false
+    # A safety cap: 1 Gbps carries about 125 viewers at 8 Mbps. Per-stream
+    # limits are applied by the CupStream server.
+    maxReaders: 150
