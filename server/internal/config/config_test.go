@@ -22,7 +22,7 @@ func TestDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Addr != ":8080" || c.DevLogin || c.SecureCookies() || c.MediaMTXAPI.String() != "http://127.0.0.1:9997" {
+	if c.Addr != ":8080" || c.DevLogin || c.NoRateLimits || c.SecureCookies() || c.MediaMTXAPI.String() != "http://127.0.0.1:9997" {
 		t.Fatalf("unexpected defaults: %+v", c)
 	}
 }
@@ -30,6 +30,7 @@ func TestDefaults(t *testing.T) {
 func TestErrors(t *testing.T) {
 	for name, vars := range map[string]map[string]string{
 		"dev login on public host": {"CUPSTREAM_DEV_LOGIN": "true", "CUPSTREAM_PUBLIC_URL": "https://cup.example.com"},
+		"no rate limits in public": {"CUPSTREAM_RATE_LIMITS": "false", "CUPSTREAM_PUBLIC_URL": "https://cup.example.com"},
 		"bad bool":                 {"CUPSTREAM_DEV_LOGIN": "yes please"},
 		"bad url":                  {"CUPSTREAM_MEDIAMTX_API": "127.0.0.1:9997"},
 		"half tls":                 {"CUPSTREAM_TLS_CERT": "cert.pem"},

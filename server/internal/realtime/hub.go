@@ -24,6 +24,7 @@ import (
 	"github.com/RAdu2005/cupstream/server/internal/api"
 	"github.com/RAdu2005/cupstream/server/internal/config"
 	"github.com/RAdu2005/cupstream/server/internal/gateway"
+	"github.com/RAdu2005/cupstream/server/internal/ratelimit"
 	"github.com/RAdu2005/cupstream/server/internal/rooms"
 	"github.com/RAdu2005/cupstream/server/internal/store"
 	"github.com/RAdu2005/cupstream/server/internal/view"
@@ -56,7 +57,7 @@ type Hub struct {
 	// the media sessions it opened are closed. Set it before serving.
 	TabGrace time.Duration
 
-	chatLimit *limiter
+	chatLimit *ratelimit.Limiter
 
 	mu     sync.Mutex
 	closed bool
@@ -78,7 +79,7 @@ func New(db *store.DB, rs *rooms.Service, gw *gateway.Gateway, cfg *config.Confi
 	return &Hub{
 		db: db, rooms: rs, gw: gw, cfg: cfg, now: time.Now,
 		TabGrace:  defaultTabGrace,
-		chatLimit: newLimiter(chatBurst, chatRefill),
+		chatLimit: ratelimit.New(chatBurst, chatRefill),
 		conns:     map[*conn]struct{}{},
 		subs:      map[string]*roomSubs{},
 		tabs:      map[tabKey]*tabState{},
@@ -119,7 +120,7 @@ func (h *Hub) Run(ctx context.Context) {
 
 func (h *Hub) cleanup(ctx context.Context) {
 	h.deleteExpiredChat(ctx)
-	h.chatLimit.prune(h.now())
+	h.chatLimit.Prune(h.now())
 }
 
 // shutdown closes every connection without closing their tabs' media

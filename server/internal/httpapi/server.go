@@ -105,6 +105,7 @@ func (s *Server) Handler() http.Handler {
 	// (Sec-Fetch-Site / Origin vs Host); OBS sends neither header.
 	csrf := http.NewCrossOriginProtection()
 	h := csrf.Handler(s.Sessions.Middleware(mux))
+	h = rateLimits(!s.Config.NoRateLimits, time.Now, h)
 	h = logRequests(h)
 	// Behind a tunnel or reverse proxy (CUPSTREAM_CLIENT_IP_HEADER): use the
 	// visitor's address, and send plain-HTTP visitors to HTTPS.

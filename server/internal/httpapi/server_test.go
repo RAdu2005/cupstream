@@ -40,6 +40,8 @@ type envOptions struct {
 	devLogin     bool
 	mediamtxDown bool
 	oauth        bool
+	// clientIPHeader is CUPSTREAM_CLIENT_IP_HEADER.
+	clientIPHeader string
 }
 
 func newTestEnv(t *testing.T, o envOptions) *testEnv {
@@ -62,7 +64,7 @@ func newTestEnv(t *testing.T, o envOptions) *testEnv {
 
 	// The server's own URL is only known once it starts; handlers read it
 	// through cfg at request time.
-	cfg := &config.Config{PublicURL: &url.URL{Scheme: "http", Host: "localhost"}, DevLogin: o.devLogin}
+	cfg := &config.Config{PublicURL: &url.URL{Scheme: "http", Host: "localhost"}, DevLogin: o.devLogin, ClientIPHeader: o.clientIPHeader}
 	deps := Deps{
 		Config: cfg, Version: "test", DB: db, Sealer: sealer, Sessions: auth.NewSessions(db, false),
 		Rooms: rs, MediaMTX: media, Providers: map[string]oauth.Provider{},

@@ -45,6 +45,10 @@ type Config struct {
 	// DevLogin enables the passwordless development login. It is refused
 	// unless PublicURL is a local development host.
 	DevLogin bool
+	// NoRateLimits turns off the per-address rate limits, for load tests
+	// from one machine (CUPSTREAM_RATE_LIMITS=false). Like DevLogin, it is
+	// refused unless PublicURL is a local development host.
+	NoRateLimits bool
 
 	// SecretKey (32 bytes) seals OAuth cookies and stored Discord refresh
 	// tokens. Required unless DevLogin is set, in which case a random key is
@@ -79,8 +83,8 @@ func load(getenv func(string) string) (*Config, error) {
 		}
 		return u
 	}
-	parseBool := func(key string) bool {
-		raw := get(key, "false")
+	parseBool := func(key string, def bool) bool {
+		raw := get(key, strconv.FormatBool(def))
 		b, err := strconv.ParseBool(raw)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("CUPSTREAM_%s: %q is not a boolean", key, raw))
@@ -97,7 +101,8 @@ func load(getenv func(string) string) (*Config, error) {
 		DBPath:         get("DB", "data/cupstream.db"),
 		MediaMTXAPI:    parseURL("MEDIAMTX_API", "http://127.0.0.1:9997"),
 		MediaMTXWebRTC: parseURL("MEDIAMTX_WEBRTC", "http://127.0.0.1:8889"),
-		DevLogin:       parseBool("DEV_LOGIN"),
+		DevLogin:       parseBool("DEV_LOGIN", false),
+		NoRateLimits:   !parseBool("RATE_LIMITS", true),
 		LogFormat:      get("LOG_FORMAT", "json"),
 		Google:         OAuthClient{ID: get("GOOGLE_CLIENT_ID", ""), Secret: get("GOOGLE_CLIENT_SECRET", "")},
 		Discord:        OAuthClient{ID: get("DISCORD_CLIENT_ID", ""), Secret: get("DISCORD_CLIENT_SECRET", "")},
@@ -134,6 +139,9 @@ func load(getenv func(string) string) (*Config, error) {
 	}
 	if c.DevLogin && c.PublicURL.Host != "" && !IsLocalHost(c.PublicURL.Hostname()) {
 		errs = append(errs, fmt.Errorf("CUPSTREAM_DEV_LOGIN is only allowed when CUPSTREAM_PUBLIC_URL is a local host, not %q", c.PublicURL.Hostname()))
+	}
+	if c.NoRateLimits && c.PublicURL.Host != "" && !IsLocalHost(c.PublicURL.Hostname()) {
+		errs = append(errs, fmt.Errorf("CUPSTREAM_RATE_LIMITS can only be turned off when CUPSTREAM_PUBLIC_URL is a local host, not %q", c.PublicURL.Hostname()))
 	}
 	if len(errs) > 0 {
 		return nil, errors.Join(errs...)
