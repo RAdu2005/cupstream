@@ -45,6 +45,8 @@ export type BroadcastState = {
   error?: string;
   viewers: number;
   stats?: SendStats;
+  /** The server's bitrate target, while it limits the stream below the user's maximum. */
+  target?: { maxBitrate: number; viewers: number; congested: number };
 };
 
 export type Media = {
@@ -82,6 +84,8 @@ export class Broadcast {
   private generation = 0;
   private reconnecting = false;
   private connectedAt = 0;
+  /** The last bitrate target from the server (0: none), applied again after reconnecting. */
+  private serverTarget = 0;
   private lastSent: { at: number; bytes: number } | null = null;
 
   subscribe = (fn: () => void) => {
@@ -110,7 +114,8 @@ export class Broadcast {
     if (this.active) return;
     this.media = media;
     const gen = ++this.generation;
-    this.set({ phase: 'starting', question: undefined, error: undefined, started: undefined, viewers: 0, stats: undefined });
+    this.serverTarget = 0;
+    this.set({ phase: 'starting', question: undefined, error: undefined, started: undefined, viewers: 0, stats: undefined, target: undefined });
     this.watchTracks(media);
     addEventListener('beforeunload', this.onBeforeUnload);
     addEventListener('pagehide', this.onPageHide);
@@ -146,6 +151,8 @@ export class Broadcast {
         if (msg.stream.state === 'reconnecting' && this.state.phase === 'live' && Date.now() - this.connectedAt > SETTLE_MS) {
           void this.reconnect();
         }
+      } else if (msg.type === 'bitrateTarget' && msg.streamId === started.stream.id) {
+        void this.applyTarget(msg.maxBitrate, msg.viewers, msg.congested);
       } else if (msg.type === 'streamEnded' && msg.streamId === started.stream.id) {
         this.end('Your stream has ended.');
       }
@@ -194,9 +201,22 @@ export class Broadcast {
   /** Caps what the stream sends (the server's bitrate target), within the user's maximum. */
   async setTarget(bps: number) {
     const media = this.media;
+    this.serverTarget = bps;
     if (!media || !this.publisher) return;
     const max = maxBitrateOf(media.settings);
     await this.publisher.setMaxBitrate(bps > 0 ? Math.min(bps, max) : max);
+  }
+
+  /**
+   * Applies a bitrateTarget message, which repeats every two seconds: the
+   * sender is only changed when the target does.
+   */
+  private async applyTarget(bps: number, viewers: number, congested: number) {
+    const max = this.media ? maxBitrateOf(this.media.settings) : 0;
+    const limiting = bps > 0 && bps < max;
+    this.set({ target: limiting ? { maxBitrate: bps, viewers, congested } : undefined });
+    if (bps === this.serverTarget) return;
+    await this.setTarget(bps).catch(() => undefined);
   }
 
   /** Publishes again with another codec, keeping the stream. */
@@ -228,6 +248,7 @@ export class Broadcast {
     }
     this.publisher = pub;
     this.lastSent = null;
+    if (this.serverTarget > 0) void this.setTarget(this.serverTarget).catch(() => undefined);
     clearInterval(this.statsTimer);
     this.statsTimer = setInterval(() => void this.readStats(gen), STATS_INTERVAL_MS);
   }
@@ -349,7 +370,7 @@ export class Broadcast {
     this.generation++;
     this.detach();
     if (release) this.release();
-    this.set({ phase: error ? 'ended' : 'idle', error, stats: undefined, question: undefined });
+    this.set({ phase: error ? 'ended' : 'idle', error, stats: undefined, question: undefined, target: undefined });
   }
 
   /** Stops the connection, timers and listeners, keeping the capture. */

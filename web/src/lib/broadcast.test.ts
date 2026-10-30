@@ -303,4 +303,35 @@ describe('Broadcast', () => {
     await b.stop();
     expect(stopThumbnails).toHaveBeenCalled();
   });
+
+  it('applies the server’s bitrate target within the user’s maximum, and again after reconnecting', async () => {
+    stubApi([201, started]);
+    const peers = stubPublish();
+    await b.start(media()); // automatic maximum: 5 Mbps
+    FakeWebSocket.last.open();
+    peers[0]!.onState('connected');
+    const target = (maxBitrate: number, congested = 1, streamId = stream.id) =>
+      FakeWebSocket.last.receive({ type: 'bitrateTarget', room: 'alice-room', streamId, maxBitrate, viewers: 3, congested });
+
+    target(3_000_000);
+    await flush();
+    expect(peers[0]!.maxBitrate).toEqual([3_000_000]);
+    expect(b.state.target).toEqual({ maxBitrate: 3_000_000, viewers: 3, congested: 1 });
+    target(3_000_000); // repeated every two seconds
+    target(2_000_000, 1, 'another-stream');
+    await flush();
+    expect(peers[0]!.maxBitrate).toEqual([3_000_000]);
+
+    peers[0]!.onState('failed');
+    await flush();
+    expect(peers[1]!.maxBitrate).toEqual([3_000_000]);
+
+    target(9_000_000, 0); // above the user's maximum
+    await flush();
+    expect(peers[1]!.maxBitrate).toEqual([3_000_000, 5_000_000]);
+    expect(b.state.target).toBeUndefined();
+    target(0, 0); // lifted
+    await flush();
+    expect(peers[1]!.maxBitrate.at(-1)).toBe(5_000_000);
+  });
 });

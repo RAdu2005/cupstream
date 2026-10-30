@@ -434,8 +434,24 @@ function formatBitrate(bps: number) {
   return bps >= 1e6 ? `${(bps / 1e6).toFixed(bps % 1e6 === 0 ? 0 : 1)} Mbps` : `${Math.round(bps / 1e3)} kbps`;
 }
 
-/** Warnings about how the stream is going, from what the browser reports. */
+/** Warnings about how the stream is going, from what the browser and the server report. */
 function liveWarnings(state: BroadcastState): Warning[] {
+  const t = state.target;
+  const lowered: Warning[] = t
+    ? [
+        {
+          level: 'info',
+          text:
+            t.congested > 0
+              ? `Sending at most ${formatBitrate(t.maxBitrate)}: ${t.congested} of your ${t.viewers} ${t.viewers === 1 ? 'viewer' : 'viewers'} cannot keep up. It goes back up once they can.`
+              : `Sending at most ${formatBitrate(t.maxBitrate)} while your viewers recover; it goes back up step by step.`,
+        },
+      ]
+    : [];
+  return [...lowered, ...browserWarnings(state)];
+}
+
+function browserWarnings(state: BroadcastState): Warning[] {
   if (state.stats?.noVideo) {
     const codec = broadcast.codec;
     return [

@@ -1,4 +1,5 @@
 import type {
+  BitrateTarget,
   ChatDeleted,
   ChatEvent,
   ClientMessage,
@@ -22,6 +23,7 @@ export type ServerMessage =
   | StreamEvent
   | StreamEnded
   | ViewerStats
+  | BitrateTarget
   | ChatEvent
   | ChatDeleted
   | RealtimeError
