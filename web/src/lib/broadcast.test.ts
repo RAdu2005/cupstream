@@ -5,9 +5,12 @@ import { fakeScreen } from '@/test/fakeMedia';
 import { FakeWebSocket } from '@/test/fakeWebSocket';
 import { Broadcast, type Media } from './broadcast';
 import { defaultSettings } from './capture';
+import { startThumbnails, uploadThumbnail } from './thumbnails';
 import { publishWhip, type WhipOptions } from './whip';
 
 vi.mock('./whip', () => ({ publishWhip: vi.fn() }));
+vi.mock('./thumbnails', () => ({ startThumbnails: vi.fn(() => stopThumbnails), uploadThumbnail: vi.fn(async () => true) }));
+const stopThumbnails = vi.fn();
 
 const stream: Stream = {
   id: 'abcdefghijklmnop',
@@ -285,5 +288,19 @@ describe('Broadcast', () => {
     await flush();
     expect(vi.mocked(publishWhip).mock.calls[1]?.[3]).toMatchObject({ codec: 'av1' });
     expect(b.codec).toBe('av1');
+  });
+
+  it('uploads thumbnails of the capture while streaming', async () => {
+    stubApi([201, started]);
+    stubPublish();
+    const m = media();
+    await b.start(m);
+    expect(startThumbnails).toHaveBeenCalledWith(m.screen.getVideoTracks()[0], expect.any(Function));
+    const upload = vi.mocked(startThumbnails).mock.calls.at(-1)![1];
+    const jpeg = new Blob(['x'], { type: 'image/jpeg' });
+    await upload(jpeg);
+    expect(uploadThumbnail).toHaveBeenCalledWith(stream.id, 'tok', jpeg);
+    await b.stop();
+    expect(stopThumbnails).toHaveBeenCalled();
   });
 });
