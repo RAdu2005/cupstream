@@ -1,24 +1,29 @@
-import { Copy, Lock, Radio, Square, Users } from 'lucide-react';
+import { Copy, Lock, Radio, Square, Users, WifiOff } from 'lucide-react';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router';
 import { useMe } from '@/api/auth';
 import { ApiError } from '@/api/client';
+import { useRoomRealtime } from '@/api/realtime';
 import { useEndStream, useRoom } from '@/api/rooms';
-import type { Room as RoomData, Stream } from '@/api/types.gen';
+import type { Room as RoomData, Stream, ViewerStats } from '@/api/types.gen';
+import { ChatPanel } from '@/components/ChatPanel';
 import { Player } from '@/components/Player';
+import { PresenceList } from '@/components/PresenceList';
 import { Button, Card } from '@/components/ui';
 import { visibilityLabel } from '@/lib/labels';
 
 export function Room() {
   const { slug = '' } = useParams();
   const room = useRoom(slug);
+  const { data: me } = useMe();
+  const live = useRoomRealtime(slug, room.isSuccess && !room.error);
 
   if (room.isPending) return null;
   if (room.error) return <RoomRefused error={room.error} />;
 
   const data = room.data;
   return (
-    <div className="mx-auto w-full max-w-6xl space-y-6 p-4 sm:p-8">
+    <div className="mx-auto w-full max-w-7xl space-y-6 p-4 sm:p-8">
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold">{data.owner ? `${data.owner.displayName}'s room` : 'Discord room'}</h1>
@@ -28,27 +33,51 @@ export function Room() {
             </p>
           )}
         </div>
-        {data.permissions.stream && <ObsHint slug={data.slug} />}
+        <div className="flex flex-wrap items-center gap-3">
+          {live.status !== 'open' && (
+            <span className="flex items-center gap-1.5 text-sm text-muted" role="status">
+              <WifiOff className="size-3.5" aria-hidden /> Reconnecting…
+            </span>
+          )}
+          {data.permissions.stream && <ObsHint slug={data.slug} />}
+        </div>
       </header>
 
-      {data.streams.length === 0 ? (
-        <Card className="flex flex-col items-center gap-2 py-16 text-center">
-          <Radio className="size-8 text-muted" aria-hidden />
-          <p className="font-semibold">Nobody is live in this room</p>
-          <p className="text-sm text-muted">Streams appear here as soon as someone goes live.</p>
-        </Card>
-      ) : (
-        <div className={data.streams.length > 1 ? 'grid gap-4 lg:grid-cols-2' : 'grid gap-4'}>
-          {data.streams.map((s) => (
-            <StreamTile key={s.id} stream={s} room={data} />
-          ))}
-        </div>
-      )}
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
+        {data.streams.length === 0 ? (
+          <Card className="flex flex-col items-center justify-center gap-2 py-16 text-center">
+            <Radio className="size-8 text-muted" aria-hidden />
+            <p className="font-semibold">Nobody is live in this room</p>
+            <p className="text-sm text-muted">Streams appear here as soon as someone goes live.</p>
+          </Card>
+        ) : (
+          <div
+            className={data.streams.length > 1 ? 'grid content-start gap-4 xl:grid-cols-2' : 'grid content-start gap-4'}
+          >
+            {data.streams.map((s) => (
+              <StreamTile key={s.id} stream={s} room={data} viewerStats={live.viewerStats[s.id]} />
+            ))}
+          </div>
+        )}
+        <aside className="flex flex-col gap-4">
+          <PresenceList presence={live.presence} live={new Set(data.streams.map((s) => s.user.id))} />
+          <ChatPanel
+            messages={live.chat}
+            signedIn={!!me}
+            canChat={data.permissions.chat}
+            canModerate={data.permissions.moderateChat}
+            connected={live.status === 'open'}
+            error={live.chatError}
+            onSend={live.sendChat}
+            onDelete={live.deleteChat}
+          />
+        </aside>
+      </div>
     </div>
   );
 }
 
-function StreamTile({ stream, room }: { stream: Stream; room: RoomData }) {
+function StreamTile({ stream, room, viewerStats }: { stream: Stream; room: RoomData; viewerStats?: ViewerStats }) {
   const { data: me } = useMe();
   const end = useEndStream(room.slug);
   const canEnd = me?.id === stream.user.id || room.permissions.moderateStreams;
@@ -85,6 +114,12 @@ function StreamTile({ stream, room }: { stream: Stream; room: RoomData }) {
           )}
         </div>
       </div>
+      {me?.id === stream.user.id && viewerStats && viewerStats.viewers > 0 && (
+        <p className="text-xs text-muted">
+          Your viewers receive {formatBitrate(viewerStats.bitrate / viewerStats.viewers)} each; worst packet loss{' '}
+          {(viewerStats.maxLossRatio * 100).toFixed(1)}%, worst round trip {Math.round(viewerStats.maxRttMs)} ms.
+        </p>
+      )}
       {me?.id === stream.user.id && stream.source === 'obs' && (stream.keyFrameInterval ?? 0) > slowKeyFrames && (
         <p className="text-sm text-muted">
           Your keyframe interval is about {Math.round(stream.keyFrameInterval ?? 0)} seconds, so new viewers wait that
@@ -93,6 +128,10 @@ function StreamTile({ stream, room }: { stream: Stream; room: RoomData }) {
       )}
     </div>
   );
+}
+
+function formatBitrate(bps: number) {
+  return bps >= 1e6 ? `${(bps / 1e6).toFixed(1)} Mbps` : `${Math.round(bps / 1e3)} kbps`;
 }
 
 // OBS ignores requests for keyframes, so its interval is what new viewers wait.

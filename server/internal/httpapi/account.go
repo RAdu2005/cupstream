@@ -10,6 +10,7 @@ import (
 	"github.com/RAdu2005/cupstream/server/internal/api"
 	"github.com/RAdu2005/cupstream/server/internal/auth"
 	"github.com/RAdu2005/cupstream/server/internal/store"
+	"github.com/RAdu2005/cupstream/server/internal/view"
 )
 
 func (s *Server) account(w http.ResponseWriter, r *http.Request, cur auth.Current) {
@@ -30,7 +31,7 @@ func (s *Server) account(w http.ResponseWriter, r *http.Request, cur auth.Curren
 		return
 	}
 	out := api.Account{
-		User:       userJSON(cur.User),
+		User:       view.User(cur.User),
 		Identities: []api.Identity{},
 		Settings:   api.Settings{StartMode: settings.StartMode, ObsFallback: settings.ObsFallback},
 		RoomSlug:   room.Slug,
@@ -55,7 +56,7 @@ func (s *Server) updateProfile(w http.ResponseWriter, r *http.Request, cur auth.
 	case err != nil:
 		internalError(w, r, err)
 	default:
-		writeJSON(w, http.StatusOK, api.Me{User: userJSON(u)})
+		writeJSON(w, http.StatusOK, api.Me{User: view.User(u)})
 	}
 }
 
@@ -113,6 +114,7 @@ func (s *Server) revokeSession(w http.ResponseWriter, r *http.Request, cur auth.
 	case !ok:
 		writeError(w, http.StatusNotFound, "no such session")
 	default:
+		s.Realtime.CloseSession(r.PathValue("id"))
 		w.WriteHeader(http.StatusNoContent)
 	}
 }

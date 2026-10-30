@@ -176,6 +176,7 @@ func (g *Gateway) hold(ctx context.Context, mtxID string) {
 	g.mu.Lock()
 	if sess, ok := g.sessions[mtxID]; ok {
 		sess.held, sess.heldAt = true, g.now()
+		g.changed()
 	}
 	g.mu.Unlock()
 }

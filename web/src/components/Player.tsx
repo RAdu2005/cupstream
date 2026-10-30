@@ -1,5 +1,6 @@
 import { Loader2, Volume2, VolumeX } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { realtime } from '@/lib/realtime';
 import { playWhep } from '@/lib/whep';
 
 type Status = 'connecting' | 'playing' | 'error';
@@ -17,7 +18,8 @@ export function Player({ streamId, label }: { streamId: string; label: string })
     let close: (() => Promise<void>) | undefined;
     setStatus('connecting');
 
-    playWhep(`/api/streams/${streamId}/whep`, (state) => {
+    // The tab ID lets the server close this session when the tab goes away.
+    playWhep(`/api/streams/${streamId}/whep?tab=${realtime.tabId}`, (state) => {
       if (state === 'failed' && !cancelled) {
         setStatus('error');
         setError('The connection to the media server failed.');

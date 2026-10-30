@@ -9,6 +9,7 @@ import (
 	"github.com/RAdu2005/cupstream/server/internal/auth"
 	"github.com/RAdu2005/cupstream/server/internal/config"
 	"github.com/RAdu2005/cupstream/server/internal/oauth"
+	"github.com/RAdu2005/cupstream/server/internal/view"
 )
 
 func (s *Server) authProviders(w http.ResponseWriter, r *http.Request) {
@@ -28,6 +29,9 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	if err := s.Sessions.End(r.Context(), w, r); err != nil {
 		internalError(w, r, err)
 		return
+	}
+	if cur, ok := auth.FromContext(r.Context()); ok {
+		s.Realtime.CloseSession(cur.SessionID)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -66,7 +70,7 @@ func (s *Server) devLogin(w http.ResponseWriter, r *http.Request) {
 		internalError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, api.Me{User: userJSON(user)})
+	writeJSON(w, http.StatusOK, api.Me{User: view.User(user)})
 }
 
 // switchSession ends the request's session, if any, and starts one for userID.

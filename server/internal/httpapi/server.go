@@ -1,6 +1,6 @@
 // Package httpapi is the public HTTP entry point: the JSON API, OAuth
-// redirects, WHIP/WHEP signaling (handed to the gateway), the health check
-// and the website.
+// redirects, WHIP/WHEP signaling (handed to the gateway), the realtime
+// WebSocket (handed to the hub), the health check and the website.
 package httpapi
 
 import (
@@ -17,9 +17,11 @@ import (
 	"github.com/RAdu2005/cupstream/server/internal/gateway"
 	"github.com/RAdu2005/cupstream/server/internal/mediamtx"
 	"github.com/RAdu2005/cupstream/server/internal/oauth"
+	"github.com/RAdu2005/cupstream/server/internal/realtime"
 	"github.com/RAdu2005/cupstream/server/internal/rooms"
 	"github.com/RAdu2005/cupstream/server/internal/seal"
 	"github.com/RAdu2005/cupstream/server/internal/store"
+	"github.com/RAdu2005/cupstream/server/internal/view"
 )
 
 // Deps are the services the HTTP layer uses.
@@ -34,6 +36,7 @@ type Deps struct {
 	Providers map[string]oauth.Provider
 	Rooms     *rooms.Service
 	Gateway   *gateway.Gateway
+	Realtime  *realtime.Hub
 	MediaMTX  *mediamtx.Client
 	Web       http.Handler
 }
@@ -89,6 +92,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/media/{stream}/{kind}/{secret}", s.Gateway.HandleSession)
 	mux.HandleFunc("POST /api/media/{stream}/whep/{secret}/{action}", s.Gateway.HandleSessionControl)
 
+	// Realtime: stream events, presence and chat. The hub checks the Origin
+	// header itself, since the cross-origin protection below skips GET.
+	mux.HandleFunc("GET /api/realtime", s.Realtime.Serve)
+
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not found")
 	})
@@ -127,11 +134,7 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) me(w http.ResponseWriter, r *http.Request, cur auth.Current) {
-	writeJSON(w, http.StatusOK, api.Me{User: userJSON(cur.User)})
-}
-
-func userJSON(u store.User) api.User {
-	return api.User{ID: u.ID, Handle: u.Handle, DisplayName: u.DisplayName, AvatarURL: u.AvatarURL.String}
+	writeJSON(w, http.StatusOK, api.Me{User: view.User(cur.User)})
 }
 
 // userID returns the signed-in user's ID, or "".

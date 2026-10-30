@@ -13,6 +13,7 @@ import (
 	"github.com/RAdu2005/cupstream/server/internal/auth"
 	"github.com/RAdu2005/cupstream/server/internal/gateway"
 	"github.com/RAdu2005/cupstream/server/internal/store"
+	"github.com/RAdu2005/cupstream/server/internal/view"
 )
 
 var timeNow = time.Now
@@ -42,6 +43,13 @@ func (s *Server) ownRoom(w http.ResponseWriter, r *http.Request, cur auth.Curren
 		return room, false
 	}
 	return room, true
+}
+
+// accessChanged applies a change to room's access rules to the media
+// sessions and realtime subscriptions in it.
+func (s *Server) accessChanged(ctx context.Context, room store.Room) {
+	s.Gateway.Reevaluate(ctx, room)
+	s.Realtime.Reevaluate(ctx, room)
 }
 
 func refusal(w http.ResponseWriter, reason access.Reason, msg string) {
@@ -79,9 +87,9 @@ func (s *Server) getRoom(w http.ResponseWriter, r *http.Request) {
 		},
 		Streams: []api.Stream{},
 	}
-	users := userCache{db: s.DB}
+	users := view.Users{DB: s.DB}
 	if room.OwnerID.Valid {
-		owner, err := users.get(ctx, room.OwnerID.String)
+		owner, err := users.Get(ctx, room.OwnerID.String)
 		if err != nil {
 			internalError(w, r, err)
 			return
@@ -89,7 +97,7 @@ func (s *Server) getRoom(w http.ResponseWriter, r *http.Request) {
 		out.Owner = &owner
 	}
 	for _, ls := range s.Gateway.RoomStreams(room.ID) {
-		st, err := streamJSON(ctx, &users, ls)
+		st, err := view.Stream(ctx, &users, ls)
 		if err != nil {
 			internalError(w, r, err)
 			return
@@ -97,36 +105,6 @@ func (s *Server) getRoom(w http.ResponseWriter, r *http.Request) {
 		out.Streams = append(out.Streams, st)
 	}
 	writeJSON(w, http.StatusOK, out)
-}
-
-type userCache struct {
-	db *store.DB
-	m  map[string]api.User
-}
-
-func (c *userCache) get(ctx context.Context, id string) (api.User, error) {
-	if u, ok := c.m[id]; ok {
-		return u, nil
-	}
-	u, err := c.db.GetUser(ctx, id)
-	if err != nil {
-		return api.User{}, err
-	}
-	if c.m == nil {
-		c.m = map[string]api.User{}
-	}
-	c.m[id] = userJSON(u)
-	return c.m[id], nil
-}
-
-func streamJSON(ctx context.Context, users *userCache, ls gateway.LiveStream) (api.Stream, error) {
-	u, err := users.get(ctx, ls.Stream.UserID)
-	return api.Stream{
-		ID: ls.Stream.ID, User: u, Source: ls.Stream.Source, State: string(ls.State),
-		StartedAt: ls.Stream.StartedAt, Viewers: ls.Viewers,
-		Bitrate: ls.Stats.Bitrate, LossRatio: ls.Stats.LossRatio,
-		KeyFrameInterval: ls.Stats.KeyFrameInterval.Seconds(),
-	}, err
 }
 
 func (s *Server) updateRoom(w http.ResponseWriter, r *http.Request, cur auth.Current) {
@@ -148,7 +126,7 @@ func (s *Server) updateRoom(w http.ResponseWriter, r *http.Request, cur auth.Cur
 		return
 	}
 	room.Visibility = sql.NullString{String: string(v), Valid: true}
-	s.Gateway.Reevaluate(r.Context(), room)
+	s.accessChanged(r.Context(), room)
 	writeJSON(w, http.StatusOK, req)
 }
 
@@ -164,7 +142,7 @@ func (s *Server) listAllowed(w http.ResponseWriter, r *http.Request, cur auth.Cu
 	}
 	out := []api.AllowedEntry{}
 	for _, row := range rows {
-		out = append(out, api.AllowedEntry{User: userJSON(row.User), CanStream: row.CanStream})
+		out = append(out, api.AllowedEntry{User: view.User(row.User), CanStream: row.CanStream})
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -204,8 +182,8 @@ func (s *Server) setAllowed(w http.ResponseWriter, r *http.Request, cur auth.Cur
 		internalError(w, r, err)
 		return
 	}
-	s.Gateway.Reevaluate(r.Context(), room) // a co-streamer may have lost streaming
-	writeJSON(w, http.StatusOK, api.AllowedEntry{User: userJSON(u), CanStream: req.CanStream})
+	s.accessChanged(r.Context(), room) // a co-streamer may have lost streaming
+	writeJSON(w, http.StatusOK, api.AllowedEntry{User: view.User(u), CanStream: req.CanStream})
 }
 
 func (s *Server) removeAllowed(w http.ResponseWriter, r *http.Request, cur auth.Current) {
@@ -217,7 +195,7 @@ func (s *Server) removeAllowed(w http.ResponseWriter, r *http.Request, cur auth.
 		internalError(w, r, err)
 		return
 	}
-	s.Gateway.Reevaluate(r.Context(), room)
+	s.accessChanged(r.Context(), room)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -239,8 +217,8 @@ func (s *Server) startStream(w http.ResponseWriter, r *http.Request, cur auth.Cu
 		s.Gateway.WriteStartError(w, r, err)
 		return
 	}
-	users := userCache{db: s.DB}
-	st, err := streamJSON(r.Context(), &users, gateway.LiveStream{Stream: started.Stream, State: gateway.Starting})
+	users := view.Users{DB: s.DB}
+	st, err := view.Stream(r.Context(), &users, gateway.LiveStream{Stream: started.Stream, State: gateway.Starting})
 	if err != nil {
 		internalError(w, r, err)
 		return

@@ -8,6 +8,14 @@ import (
 	"database/sql"
 )
 
+type ChatMessage struct {
+	ID        string
+	RoomID    string
+	UserID    string
+	Body      string
+	CreatedAt int64
+}
+
 type DiscordToken struct {
 	UserID                string
 	EncryptedRefreshToken []byte

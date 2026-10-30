@@ -17,6 +17,7 @@ import (
 	"github.com/RAdu2005/cupstream/server/internal/gateway"
 	"github.com/RAdu2005/cupstream/server/internal/oauth"
 	"github.com/RAdu2005/cupstream/server/internal/seal"
+	"github.com/RAdu2005/cupstream/server/internal/view"
 )
 
 const (
@@ -230,7 +231,7 @@ func (s *Server) pendingMerge(w http.ResponseWriter, r *http.Request, cur auth.C
 		writeError(w, http.StatusNotFound, "no account merge is pending")
 		return
 	}
-	writeJSON(w, http.StatusOK, api.PendingMerge{Provider: m.Provider, Username: m.Username, Other: userJSON(other)})
+	writeJSON(w, http.StatusOK, api.PendingMerge{Provider: m.Provider, Username: m.Username, Other: view.User(other)})
 }
 
 func (s *Server) confirmMerge(w http.ResponseWriter, r *http.Request, cur auth.Current) {
@@ -245,6 +246,7 @@ func (s *Server) confirmMerge(w http.ResponseWriter, r *http.Request, cur auth.C
 		internalError(w, r, err)
 		return
 	}
+	s.Realtime.CloseUser(m.OtherID)
 	if m.Provider == oauth.Discord && m.Token != nil && s.Discord != nil {
 		if err := s.Discord.Store(r.Context(), cur.User.ID, m.Token); err != nil {
 			slog.WarnContext(r.Context(), "storing discord token after merge failed", "err", err)

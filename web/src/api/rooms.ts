@@ -4,12 +4,14 @@ import type { AllowedEntry, Room, Visibility } from './types.gen';
 
 export const roomKey = (slug: string) => ['room', slug] as const;
 
-/** A room and its live streams, polled until realtime events exist. */
+/**
+ * A room and its live streams. The streams are kept current by realtime
+ * events (useRoomRealtime), which also refetch the room when needed.
+ */
 export function useRoom(slug: string) {
   return useQuery({
     queryKey: roomKey(slug),
     queryFn: () => api<Room>(`/api/rooms/${slug}`),
-    refetchInterval: 3000,
     retry: false,
   });
 }

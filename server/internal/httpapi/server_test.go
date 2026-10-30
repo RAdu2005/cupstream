@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/RAdu2005/cupstream/server/internal/api"
 	"github.com/RAdu2005/cupstream/server/internal/auth"
@@ -19,6 +20,7 @@ import (
 	"github.com/RAdu2005/cupstream/server/internal/mediamtx"
 	"github.com/RAdu2005/cupstream/server/internal/mediamtx/mtxtest"
 	"github.com/RAdu2005/cupstream/server/internal/oauth"
+	"github.com/RAdu2005/cupstream/server/internal/realtime"
 	"github.com/RAdu2005/cupstream/server/internal/rooms"
 	"github.com/RAdu2005/cupstream/server/internal/seal"
 	"github.com/RAdu2005/cupstream/server/internal/store"
@@ -29,6 +31,7 @@ type testEnv struct {
 	db      *store.DB
 	mtx     *mtxtest.Fake
 	gw      *gateway.Gateway
+	hub     *realtime.Hub
 	google  *mockGoogle
 	discord *mockDiscord
 }
@@ -76,6 +79,19 @@ func newTestEnv(t *testing.T, o envOptions) *testEnv {
 	deps.Accounts = auth.NewAccounts(db, deps.Discord)
 	e.gw = gateway.New(db, media, rs, cfg.PublicURL)
 	deps.Gateway = e.gw
+	e.hub = realtime.New(db, rs, e.gw, cfg)
+	e.hub.TabGrace = 50 * time.Millisecond
+	deps.Realtime = e.hub
+	ctx, cancel := context.WithCancel(ctx)
+	hubDone := make(chan struct{})
+	go func() {
+		defer close(hubDone)
+		e.hub.Run(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-hubDone
+	})
 
 	e.srv = httptest.NewServer(New(deps).Handler())
 	t.Cleanup(e.srv.Close)
