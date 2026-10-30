@@ -21,7 +21,8 @@ const DISCORD_EXES: &[&str] = &[
 const PROCESS_LOOPBACK_BUILD: u32 = 20348;
 
 fn windows_build() -> Option<u32> {
-    System::kernel_version()?
+    System::kernel_version()
+        .ok()?
         .split('.')
         .next_back()?
         .parse()
