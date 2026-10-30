@@ -2,6 +2,7 @@ package discord
 
 import (
 	"context"
+	"database/sql"
 	"slices"
 	"sort"
 	"testing"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/RAdu2005/cupstream/server/internal/access"
 	"github.com/RAdu2005/cupstream/server/internal/auth"
+	"github.com/RAdu2005/cupstream/server/internal/gateway"
 	"github.com/RAdu2005/cupstream/server/internal/oauth"
 	"github.com/RAdu2005/cupstream/server/internal/rooms"
 	"github.com/RAdu2005/cupstream/server/internal/store"
@@ -46,6 +48,7 @@ type fixture struct {
 
 type fakeAPI struct {
 	voice   map[string]*discordgo.VoiceState // by user ID
+	members map[string]*discordgo.Member
 	lookups int
 }
 
@@ -55,6 +58,9 @@ func (a *fakeAPI) UserVoiceState(_ context.Context, _, userID string) (*discordg
 }
 
 func (a *fakeAPI) GuildMember(_ context.Context, _, userID string) (*discordgo.Member, error) {
+	if m, ok := a.members[userID]; ok {
+		return m, nil
+	}
 	return &discordgo.Member{User: &discordgo.User{ID: userID}}, nil
 }
 
@@ -361,5 +367,103 @@ func TestDiscordRoomAccess(t *testing.T) {
 	f.bot.handle(snapshot(voice("alice", "c1"))) // reloads the settings
 	if r := check(alice.ID, access.Stream); r != access.OK {
 		t.Errorf("stream with anyone_in_channel: %q", r)
+	}
+}
+
+// live starts a stream by user in room, as the gateway records it.
+func (f *fixture) live(room store.Room, user store.User) {
+	f.t.Helper()
+	if _, err := f.db.CreateStream(context.Background(), store.CreateStreamParams{
+		ID: "s" + room.ChannelID.String, RoomID: room.ID, UserID: user.ID, Source: "web", StartedAt: f.clock.Unix(),
+	}); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
+func TestStreamsEndWithTheirRoom(t *testing.T) {
+	f := newFixture(t)
+	alice := f.link("alice")
+	ended := map[string]string{} // channel ID -> reason
+	f.bot.EndStreams = func(_ context.Context, room store.Room, reason string) { ended[room.ChannelID.String] = reason }
+	c1, gone := f.room("c1"), f.room("c3")
+	f.room("c2")
+	f.live(c1, alice)
+	f.live(gone, alice)
+
+	// c3 was deleted while the bot was away.
+	f.bot.handle(ready())
+	f.bot.handle(snapshot(voice("alice", "c1", streamers)))
+	f.advance(0)
+	if ended["c3"] != gateway.EndDiscordChannelDeleted || len(ended) != 1 {
+		t.Fatalf("after the snapshot: %v", ended)
+	}
+
+	f.bot.handle(&discordgo.ChannelDelete{Channel: &discordgo.Channel{ID: "c2", GuildID: guildID}})
+	f.advance(0)
+	if ended["c2"] != gateway.EndDiscordChannelDeleted {
+		t.Fatalf("after deleting c2: %v", ended)
+	}
+
+	f.bot.handle(&discordgo.GuildDelete{Guild: &discordgo.Guild{ID: guildID}})
+	f.advance(0)
+	if ended["c1"] != gateway.EndDiscordBotRemoved {
+		t.Fatalf("after removing the bot: %v", ended)
+	}
+
+	// After a restart, the bot is no longer in the server of a live room.
+	f2 := newFixture(t)
+	bob := f2.link("bob")
+	ended = map[string]string{}
+	f2.bot.EndStreams = func(_ context.Context, room store.Room, reason string) { ended[room.ChannelID.String] = reason }
+	f2.live(f2.room("c1"), bob)
+	f2.bot.handle(&discordgo.Ready{User: &discordgo.User{}})
+	f2.advance(0)
+	if ended["c1"] != gateway.EndDiscordBotRemoved {
+		t.Fatalf("after a restart without the server: %v", ended)
+	}
+}
+
+func TestRefreshStreamers(t *testing.T) {
+	f := newFixture(t)
+	alice := f.link("alice")
+	room := f.room("c1")
+	f.live(room, alice)
+	f.bot.handle(ready())
+	f.bot.handle(snapshot(voice("alice", "c1", streamers)))
+	f.api.members = map[string]*discordgo.Member{"alice": {User: &discordgo.User{ID: "alice"}}}
+
+	f.bot.refreshStreamers(context.Background())
+	run(t, f, []step{
+		{name: "lost the role", user: "alice", channel: "c1", want: streamer},
+		{name: "grace period over", advance: streamerGrace, user: "alice", channel: "c1", want: viewer},
+	})
+}
+
+func TestChannel(t *testing.T) {
+	f := newFixture(t)
+	f.link("alice")
+	f.link("dave")
+	f.bot.handle(ready())
+	f.bot.handle(snapshot(voice("alice", "c1"), voice("dave", "c2")))
+	ctx := context.Background()
+
+	if g, c, ok := f.bot.Channel(ctx, "alice", nil); !ok || g != guildID || c != "c1" {
+		t.Errorf("Channel = %q %q %v", g, c, ok)
+	}
+	if _, _, ok := f.bot.Channel(ctx, "erin", []string{guildID}); ok {
+		t.Error("someone not in voice has a channel")
+	}
+	if err := f.db.UpdateDiscordGuild(ctx, store.UpdateDiscordGuildParams{
+		GuildID: guildID, StreamPolicy: string(access.VideoPermission), Announce: true,
+		TrackedChannels: sql.NullString{String: `["c1"]`, Valid: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.bot.handle(snapshot(voice("alice", "c1"), voice("dave", "c2")))
+	if _, _, ok := f.bot.Channel(ctx, "dave", nil); ok {
+		t.Error("an untracked channel has a room")
+	}
+	if _, _, ok := f.bot.Channel(ctx, "alice", nil); !ok {
+		t.Error("a tracked channel has no room")
 	}
 }

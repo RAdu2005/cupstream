@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/RAdu2005/cupstream/server/internal/access"
 	"github.com/RAdu2005/cupstream/server/internal/auth"
@@ -30,7 +31,55 @@ func (e *DestinationError) Error() string { return e.Message }
 const (
 	CodeDiscordUnavailable = "discord_unavailable"
 	CodeRoomFull           = "room_full"
+	// OBS reconnected soon after its stream in a Discord room ended because
+	// the streamer left voice (see obsBlock).
+	CodeLeftVoice = "left_voice"
 )
+
+// obsBlock is how long after a stream in a Discord room ended because the
+// streamer left voice OBS may not quietly reconnect into the link room.
+const obsBlock = 2 * time.Minute
+
+// discordDestination finds the Discord room for a stream with the start
+// mode Discord (auto): the room of the voice channel the user is in, if
+// they may stream there. Otherwise why says why not.
+func (g *Gateway) discordDestination(ctx context.Context, userID string) (room store.Room, why string, err error) {
+	room, ok, err := g.rooms.CurrentDiscordRoom(ctx, userID)
+	if err != nil {
+		return room, "", err
+	}
+	if !ok {
+		return room, "you are not in a Discord voice channel on a server with the CupStream bot", nil
+	}
+	switch reason, err := g.rooms.Check(ctx, room, userID, access.Stream); {
+	case err != nil:
+		return room, "", err
+	case reason == access.NoVideoPerm:
+		return room, "you do not have the Video permission in your voice channel", nil
+	case reason != access.OK:
+		return room, "you cannot stream in your voice channel right now", nil
+	}
+	return room, "", nil
+}
+
+// blockOBS refuses userID's OBS reconnects to anywhere but a Discord room
+// for a while, after their OBS stream ended because they left voice.
+func (g *Gateway) blockOBS(userID string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.obsBlocks[userID] = g.now().Add(obsBlock)
+}
+
+func (g *Gateway) obsBlocked(userID string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	until, ok := g.obsBlocks[userID]
+	if ok && !g.now().Before(until) {
+		delete(g.obsBlocks, userID)
+		return false
+	}
+	return ok
+}
 
 type StartRequest struct {
 	User   store.User
@@ -138,9 +187,13 @@ func (g *Gateway) destination(ctx context.Context, req StartRequest) (store.Room
 		return store.Room{}, err
 	}
 	if settings.StartMode == "discord_auto" {
-		// TODO(phase 6): a Discord room when the user is in a voice channel on a
-		// server with the bot and may stream there.
-		why := "you are not in a Discord voice channel on a server with the CupStream bot"
+		room, why, err := g.discordDestination(ctx, req.User.ID)
+		if err != nil || why == "" {
+			return room, err
+		}
+		if req.Source == SourceOBS && g.obsBlocked(req.User.ID) {
+			return store.Room{}, &DestinationError{Code: CodeLeftVoice, Message: "your stream ended because you left the voice channel; rejoin it to go on streaming there"}
+		}
 		switch {
 		case req.Source == SourceOBS && settings.ObsFallback == "refuse":
 			return store.Room{}, &DestinationError{Code: CodeDiscordUnavailable, Message: why + ", and your OBS setting refuses other rooms"}

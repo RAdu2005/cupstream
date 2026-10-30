@@ -35,6 +35,9 @@ type Voice interface {
 	Policy(guildID string) access.StreamPolicy
 	// Stale reports whether the bot's view of the server is out of date.
 	Stale(guildID string) bool
+	// Channel returns the voice channel a Discord user is in, if it has a
+	// Discord room. guilds are the user's servers, to look in.
+	Channel(ctx context.Context, discordUserID string, guilds []string) (guildID, channelID string, ok bool)
 }
 
 // VoiceMember is a Discord user as the bot sees them in one voice channel.
@@ -89,6 +92,36 @@ func (s *Service) DiscordRoom(ctx context.Context, guildID, channelID string) (s
 		return room, err
 	}
 	return s.db.GetDiscordRoom(ctx, key)
+}
+
+// CurrentDiscordRoom returns the room of the voice channel userID is in,
+// creating it on first use, or ok false when they are in none that has a
+// room (not in voice, or in a server without the bot).
+func (s *Service) CurrentDiscordRoom(ctx context.Context, userID string) (room store.Room, ok bool, err error) {
+	if s.voice == nil {
+		return room, false, nil
+	}
+	ident, err := s.db.GetDiscordIdentity(ctx, userID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return room, false, nil
+	}
+	if err != nil {
+		return room, false, err
+	}
+	rows, err := s.db.ListUserGuilds(ctx, userID)
+	if err != nil {
+		return room, false, err
+	}
+	guilds := make([]string, len(rows))
+	for i, g := range rows {
+		guilds[i] = g.GuildID
+	}
+	guildID, channelID, ok := s.voice.Channel(ctx, ident.Subject, guilds)
+	if !ok {
+		return room, false, nil
+	}
+	room, err = s.DiscordRoom(ctx, guildID, channelID)
+	return room, err == nil, err
 }
 
 func nullString(s string) sql.NullString { return sql.NullString{String: s, Valid: true} }
