@@ -55,3 +55,9 @@ SELECT * FROM user_settings WHERE user_id = ?;
 
 -- name: UpdateUserSettings :exec
 UPDATE user_settings SET start_mode = ?, obs_fallback = ? WHERE user_id = ?;
+
+-- name: SetUserBanned :exec
+UPDATE users SET banned_at = ? WHERE id = ?;
+
+-- name: ListBannedUsers :many
+SELECT * FROM users WHERE banned_at IS NOT NULL ORDER BY banned_at DESC;

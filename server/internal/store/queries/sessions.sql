@@ -6,7 +6,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?);
 SELECT sqlc.embed(sessions), sqlc.embed(users)
 FROM sessions
 JOIN users ON users.id = sessions.user_id
-WHERE sessions.token_hash = ? AND sessions.expires_at > ?;
+WHERE sessions.token_hash = ? AND sessions.expires_at > ? AND users.banned_at IS NULL;
 
 -- name: ListSessions :many
 SELECT * FROM sessions WHERE user_id = ? AND expires_at > ? ORDER BY last_seen_at DESC;
@@ -22,3 +22,6 @@ DELETE FROM sessions WHERE id = ? AND user_id = ?;
 
 -- name: DeleteExpiredSessions :execrows
 DELETE FROM sessions WHERE expires_at <= ?;
+
+-- name: DeleteAllUserSessions :execrows
+DELETE FROM sessions WHERE user_id = ?;

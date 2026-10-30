@@ -71,6 +71,11 @@ type Config struct {
 	// belongs to the same Discord application as the Discord sign-in.
 	DiscordBotToken string
 
+	// Admins are the sign-in identities, as "provider:subject" (e.g.
+	// "discord:<user ID>"), whose users may end any stream and ban
+	// users. Identities rather than handles, which users choose themselves.
+	Admins map[string]bool
+
 	LogLevel  slog.Level
 	LogFormat string // "json" or "text"
 }
@@ -138,6 +143,19 @@ func load(getenv func(string) string) (*Config, error) {
 		if name = strings.TrimSpace(name); name != "" {
 			c.EgressInterfaces = append(c.EgressInterfaces, name)
 		}
+	}
+
+	c.Admins = map[string]bool{}
+	for id := range strings.SplitSeq(get("ADMINS", ""), ",") {
+		if id = strings.TrimSpace(id); id == "" {
+			continue
+		}
+		provider, subject, ok := strings.Cut(id, ":")
+		if !ok || provider == "" || subject == "" {
+			errs = append(errs, fmt.Errorf("CUPSTREAM_ADMINS: %q is not provider:subject (e.g. discord:<user ID>)", id))
+			continue
+		}
+		c.Admins[provider+":"+subject] = true
 	}
 
 	if raw := get("SECRET_KEY", ""); raw != "" {

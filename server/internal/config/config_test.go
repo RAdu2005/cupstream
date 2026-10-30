@@ -39,6 +39,7 @@ func TestErrors(t *testing.T) {
 		"short secret key":         {"CUPSTREAM_SECRET_KEY": "c2hvcnQ="},
 		"half google client":       {"CUPSTREAM_GOOGLE_CLIENT_ID": "id"},
 		"bad egress limit":         {"CUPSTREAM_EGRESS_LIMIT_MBPS": "-1"},
+		"admin without provider":   {"CUPSTREAM_ADMINS": "discord:1,12345"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := load(env(vars)); err == nil {
@@ -78,5 +79,12 @@ func TestEgress(t *testing.T) {
 	c, err := load(env(map[string]string{"CUPSTREAM_EGRESS_LIMIT_MBPS": "0.5", "CUPSTREAM_EGRESS_INTERFACE": "eno1, eno2"}))
 	if err != nil || c.EgressLimit != 500_000 || len(c.EgressInterfaces) != 2 || c.EgressInterfaces[1] != "eno2" {
 		t.Fatalf("got %v, %+v", err, c)
+	}
+}
+
+func TestAdmins(t *testing.T) {
+	c, err := load(env(map[string]string{"CUPSTREAM_ADMINS": " discord:123 ,google:abc,"}))
+	if err != nil || len(c.Admins) != 2 || !c.Admins["discord:123"] || !c.Admins["google:abc"] {
+		t.Fatalf("got %v, %v", err, c.Admins)
 	}
 }

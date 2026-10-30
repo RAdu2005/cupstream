@@ -146,6 +146,7 @@ type User struct {
 	DisplayName string
 	AvatarURL   sql.NullString
 	CreatedAt   int64
+	BannedAt    sql.NullInt64
 }
 
 type UserBlock struct {

@@ -1,5 +1,6 @@
-import { CupSoda, LogOut, Settings, Users } from 'lucide-react';
+import { CupSoda, LogOut, Settings, ShieldCheck, Users } from 'lucide-react';
 import { Link, Outlet, useNavigate } from 'react-router';
+import { useIsAdmin } from '@/api/admin';
 import { useLogout, useMe } from '@/api/auth';
 import { useFriends } from '@/api/friends';
 import { GoLiveButton } from './GoLiveButton';
@@ -37,6 +38,7 @@ function UserMenu() {
   const { data: user, isPending } = useMe();
   const logout = useLogout();
   const navigate = useNavigate();
+  const admin = useIsAdmin();
 
   if (isPending) return null;
   if (!user) {
@@ -56,6 +58,11 @@ function UserMenu() {
       </span>
       <FriendsLink />
       <Notifications userId={user.id} />
+      {admin && (
+        <Link to="/admin" aria-label="Admin" title="Admin" className="rounded-md p-2 text-muted hover:bg-raised hover:text-fg">
+          <ShieldCheck className="size-4" aria-hidden />
+        </Link>
+      )}
       <Link to="/settings" aria-label="Settings" title="Settings" className="rounded-md p-2 text-muted hover:bg-raised hover:text-fg">
         <Settings className="size-4" aria-hidden />
       </Link>

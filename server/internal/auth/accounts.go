@@ -30,6 +30,9 @@ var (
 	ErrInvalidName    = errors.New("a display name is 1–48 characters")
 	ErrProviderLinked = errors.New("an account of this provider is already linked; unlink it first")
 	ErrLastIdentity   = errors.New("this is the only way to sign in to your account")
+	// ErrBanned refuses signing in as, linking or merging an account that an
+	// admin banned.
+	ErrBanned = errors.New("this account is banned")
 )
 
 // OwnedByOtherError is returned when linking an identity that already
@@ -79,6 +82,9 @@ func (a *Accounts) SignIn(ctx context.Context, id oauth.Identity) (u store.User,
 	u, err = a.db.GetUserByIdentity(ctx, store.GetUserByIdentityParams{Provider: id.Provider, Subject: id.Subject})
 	switch {
 	case err == nil:
+		if u.BannedAt.Valid {
+			return u, false, ErrBanned
+		}
 		if err := a.refreshIdentity(ctx, u.ID, id); err != nil {
 			return u, false, err
 		}
@@ -180,6 +186,13 @@ func (a *Accounts) Link(ctx context.Context, userID string, id oauth.Identity) e
 	case err == nil && existing.UserID == userID:
 		return a.refreshIdentity(ctx, userID, id)
 	case err == nil:
+		owner, err := a.db.GetUser(ctx, existing.UserID)
+		if err != nil {
+			return err
+		}
+		if owner.BannedAt.Valid {
+			return ErrBanned
+		}
 		return &OwnedByOtherError{OtherUserID: existing.UserID}
 	case !errors.Is(err, sql.ErrNoRows):
 		return err
@@ -231,6 +244,14 @@ func (a *Accounts) Merge(ctx context.Context, userID, otherID string) error {
 		return nil
 	}
 	return a.db.Tx(ctx, func(q *store.Queries) error {
+		// Merging a banned account in would move its identities out of the ban.
+		other, err := q.GetUser(ctx, otherID)
+		if err != nil {
+			return err
+		}
+		if other.BannedAt.Valid {
+			return ErrBanned
+		}
 		mine, err := q.ListIdentities(ctx, userID)
 		if err != nil {
 			return err

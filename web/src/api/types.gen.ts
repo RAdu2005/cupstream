@@ -4,6 +4,46 @@ export type AuthProvider = 'dev' | 'google' | 'discord';
 export type Visibility = 'everyone' | 'signed_in' | 'invite_only';
 
 //////////
+// source: admin.go
+
+/**
+ * AdminOverview is the response of GET /api/admin: every live stream, and
+ * the users who are banned. Bitrates are in bits per second.
+ */
+export interface AdminOverview {
+  streams: AdminStream[];
+  /**
+   * Viewers receiving media, over all streams.
+   */
+  viewers: number /* int */;
+  /**
+   * What the server receives from streamers and sends to viewers, from
+   * MediaMTX's counters.
+   */
+  incoming: number /* int64 */;
+  outgoing: number /* int64 */;
+  banned: BannedUser[];
+}
+/**
+ * AdminStream is a live stream with the room it is in and what it costs.
+ */
+export interface AdminStream {
+  stream: Stream;
+  roomSlug: string;
+  /**
+   * Outgoing is what the stream's viewers receive together.
+   */
+  outgoing: number /* int64 */;
+}
+/**
+ * BannedUser is a user an admin banned. BannedAt is Unix seconds.
+ */
+export interface BannedUser {
+  user: User;
+  bannedAt: number /* int64 */;
+}
+
+//////////
 // source: friends.go
 
 /**
@@ -118,6 +158,10 @@ export interface User {
  */
 export interface Me {
   user: User;
+  /**
+   * Admin is set for admins (CUPSTREAM_ADMINS), who see the admin page.
+   */
+  admin?: boolean;
 }
 /**
  * AuthProviders is the response of GET /api/auth/providers: the sign-in

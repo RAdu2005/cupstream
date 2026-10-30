@@ -79,7 +79,7 @@ func (q *Queries) GetChatMessage(ctx context.Context, id string) (ChatMessage, e
 }
 
 const listChatMessages = `-- name: ListChatMessages :many
-SELECT chat_messages.id, chat_messages.room_id, chat_messages.user_id, chat_messages.body, chat_messages.created_at, users.id, users.handle, users.display_name, users.avatar_url, users.created_at
+SELECT chat_messages.id, chat_messages.room_id, chat_messages.user_id, chat_messages.body, chat_messages.created_at, users.id, users.handle, users.display_name, users.avatar_url, users.created_at, users.banned_at
 FROM chat_messages
 JOIN users ON users.id = chat_messages.user_id
 WHERE chat_messages.room_id = ?1 AND chat_messages.created_at > ?2
@@ -119,6 +119,7 @@ func (q *Queries) ListChatMessages(ctx context.Context, arg ListChatMessagesPara
 			&i.User.DisplayName,
 			&i.User.AvatarURL,
 			&i.User.CreatedAt,
+			&i.User.BannedAt,
 		); err != nil {
 			return nil, err
 		}

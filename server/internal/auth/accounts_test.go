@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 
@@ -192,3 +193,43 @@ func TestUpdateProfile(t *testing.T) {
 		t.Fatalf("invalid handle: %v", err)
 	}
 }
+
+func TestBannedAccounts(t *testing.T) {
+	ctx := context.Background()
+	acc, db := newAccounts(t)
+	banned, _, err := acc.SignIn(ctx, google("g1", "Banned"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, _, err := acc.SignIn(ctx, discord("d1", "other"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetUserBanned(ctx, store.SetUserBannedParams{BannedAt: nullInt(1), ID: banned.ID}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := acc.SignIn(ctx, google("g1", "Banned")); !errors.Is(err, ErrBanned) {
+		t.Fatalf("signing in as a banned user: %v", err)
+	}
+	// Linking or merging the banned account would move its identity out of
+	// the ban.
+	if err := acc.Link(ctx, other.ID, google("g1", "Banned")); !errors.Is(err, ErrBanned) {
+		t.Fatalf("linking a banned user's identity: %v", err)
+	}
+	if err := acc.Merge(ctx, other.ID, banned.ID); !errors.Is(err, ErrBanned) {
+		t.Fatalf("merging a banned account: %v", err)
+	}
+	if u, err := db.GetUserByIdentity(ctx, store.GetUserByIdentityParams{Provider: oauth.Google, Subject: "g1"}); err != nil || u.ID != banned.ID {
+		t.Fatalf("the identity moved: %+v, %v", u, err)
+	}
+
+	if err := db.SetUserBanned(ctx, store.SetUserBannedParams{ID: banned.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := acc.SignIn(ctx, google("g1", "Banned")); err != nil {
+		t.Fatalf("signing in after the ban was lifted: %v", err)
+	}
+}
+
+func nullInt(n int64) sql.NullInt64 { return sql.NullInt64{Int64: n, Valid: true} }

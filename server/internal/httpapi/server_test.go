@@ -44,6 +44,8 @@ type envOptions struct {
 	// clientIPHeader is CUPSTREAM_CLIENT_IP_HEADER.
 	clientIPHeader string
 	bot            *fakeBot
+	// admins is CUPSTREAM_ADMINS, e.g. "dev:root".
+	admins []string
 }
 
 func newTestEnv(t *testing.T, o envOptions) *testEnv {
@@ -67,6 +69,10 @@ func newTestEnv(t *testing.T, o envOptions) *testEnv {
 	// The server's own URL is only known once it starts; handlers read it
 	// through cfg at request time.
 	cfg := &config.Config{PublicURL: &url.URL{Scheme: "http", Host: "localhost"}, DevLogin: o.devLogin, ClientIPHeader: o.clientIPHeader}
+	cfg.Admins = map[string]bool{}
+	for _, a := range o.admins {
+		cfg.Admins[a] = true
+	}
 	deps := Deps{
 		Config: cfg, Version: "test", DB: db, Sealer: sealer, Sessions: auth.NewSessions(db, false),
 		AppCodes: auth.NewAppCodes(), Rooms: rs, MediaMTX: media, Providers: map[string]oauth.Provider{},
