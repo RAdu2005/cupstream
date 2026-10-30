@@ -47,7 +47,7 @@ The desktop app signs in like a native OAuth client (RFC 8252, with PKCE). It li
 
 ### Realtime
 
-Each browser tab opens one WebSocket, `GET /api/realtime?tab=<id>`, and subscribes to rooms over it; the messages are the `ClientMessage` and event types in `server/internal/api`. It carries live streams and viewer counts, presence, chat (kept 24 hours) and, for streamers, their viewers' statistics, so the room page does not poll. Only pages on `CUPSTREAM_PUBLIC_URL`'s origin may connect, and the server pings every 30 seconds so Cloudflare does not close idle connections. WHEP requests pass the same tab ID; when a tab's WebSocket has been gone for 15 seconds, the media sessions it opened are closed.
+Each browser tab opens one WebSocket, `GET /api/realtime?tab=<id>`, and subscribes to rooms over it; the messages are the `ClientMessage` and event types in `server/internal/api`. It carries live streams and viewer counts, presence, chat (kept 24 hours) and, for streamers, their viewers' statistics, so the room page does not poll. Only pages on `CUPSTREAM_PUBLIC_URL`'s origin may connect, and the server pings every 30 seconds so Cloudflare does not close idle connections. A signed-in user may have 20 sockets open at once, and a client address 50, signed in or not. WHEP requests pass the same tab ID; when a tab's WebSocket has been gone for 15 seconds, the media sessions it opened are closed.
 
 ### Streaming locally
 

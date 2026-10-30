@@ -109,6 +109,17 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "tab is not a valid tab ID", http.StatusBadRequest)
 		return
 	}
+	var userID string
+	if cur, ok := auth.FromContext(r.Context()); ok {
+		userID = cur.User.ID
+	}
+	addr := ratelimit.AddrKey(r.RemoteAddr)
+	if !h.reserve(userID, addr) {
+		http.Error(w, "too many open connections", http.StatusTooManyRequests)
+		return
+	}
+	defer h.release(userID, addr)
+
 	// The origin was checked above; the library checks it again by host.
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: []string{h.cfg.PublicURL.Host}})
 	if err != nil {
@@ -226,6 +237,35 @@ func (c *conn) pingLoop(ctx context.Context) {
 				return
 			}
 		}
+	}
+}
+
+// reserve counts a connection about to open against its user's and its
+// address's limits, unless either is full.
+func (h *Hub) reserve(userID, addr string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.perAddr[addr] >= h.MaxConnsPerAddr || (userID != "" && h.perUser[userID] >= h.MaxConnsPerUser) {
+		return false
+	}
+	h.perAddr[addr]++
+	if userID != "" {
+		h.perUser[userID]++
+	}
+	return true
+}
+
+func (h *Hub) release(userID, addr string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.perAddr[addr]--; h.perAddr[addr] <= 0 {
+		delete(h.perAddr, addr)
+	}
+	if userID == "" {
+		return
+	}
+	if h.perUser[userID]--; h.perUser[userID] <= 0 {
+		delete(h.perUser, userID)
 	}
 }
 

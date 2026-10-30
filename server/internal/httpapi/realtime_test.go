@@ -143,6 +143,49 @@ func TestRealtimeOrigin(t *testing.T) {
 
 // TestRealtimeSubscriptions checks access to subscriptions, presence, and
 // that subscribers who lose access lose the subscription.
+// Each user and each client address may have only so many sockets open.
+func TestRealtimeConnectionLimits(t *testing.T) {
+	e := newTestEnv(t, envOptions{devLogin: true})
+	e.hub.MaxConnsPerUser, e.hub.MaxConnsPerAddr = 2, 3
+	alice, anon := e.browser(t), e.browser(t)
+	alice.devLogin("alice")
+	refused := func(b *browser, tab string) bool {
+		t.Helper()
+		ws, resp, err := b.dial(tab, e.srv.URL)
+		if err == nil {
+			t.Cleanup(func() { ws.CloseNow() })
+			return false
+		}
+		if resp == nil || resp.StatusCode != http.StatusTooManyRequests {
+			t.Fatalf("dial %s: %v, response %+v", tab, err, resp)
+		}
+		return true
+	}
+
+	first := alice.connect("alice-tab-1")
+	alice.connect("alice-tab-2")
+	if !refused(alice, "alice-tab-3") {
+		t.Fatal("a third socket for alice was accepted")
+	}
+	// Signed out, only the address counts: it has one more.
+	if refused(anon, "anon-tab-1") {
+		t.Fatal("the address's third socket was refused")
+	}
+	if !refused(anon, "anon-tab-2") {
+		t.Fatal("a fourth socket from the address was accepted")
+	}
+
+	// Closing a socket frees its place.
+	first.ws.Close(websocket.StatusNormalClosure, "")
+	deadline := time.Now().Add(3 * time.Second)
+	for refused(alice, "alice-tab-3") {
+		if time.Now().After(deadline) {
+			t.Fatal("still refused after a socket closed")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestRealtimeSubscriptions(t *testing.T) {
 	e := newTestEnv(t, envOptions{devLogin: true})
 	alice, bob, anon := e.browser(t), e.browser(t), e.browser(t)
