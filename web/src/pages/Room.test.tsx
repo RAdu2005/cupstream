@@ -32,9 +32,18 @@ const stream: Stream = {
   lossRatio: 0,
 };
 
+/** The download test's answer: a few chunks of data. */
+function testDownload() {
+  let chunks = 4;
+  return new Response(
+    new ReadableStream({ pull: (c) => (chunks-- > 0 ? c.enqueue(new Uint8Array(16 << 10)) : c.close()) }),
+  );
+}
+
 function setup(roomResponses: Response[]) {
   const fetchMock = vi.fn(async (url: string) => {
     if (url === '/api/me') return json(200, { user: bob });
+    if (url.startsWith('/api/bandwidth-test')) return testDownload();
     if (url === '/api/rooms/abc') return roomResponses.shift() ?? json(200, room);
     throw new Error(`unexpected fetch ${url}`);
   });
@@ -167,7 +176,10 @@ test('cards start streams in a focus or grid layout, up to four at once', async 
   expect(within(main).getByRole('button', { name: 'Mute' })).toBeInTheDocument(); // the focused stream is heard
   expect(screen.queryByRole('radiogroup', { name: 'Layout' })).not.toBeInTheDocument();
 
+  // Opening a second stream checks the connection first (the test fails
+  // here, which does not stop the viewer).
   fireEvent.click(cards.getByRole('button', { name: "Watch User 1's stream" }));
+  await screen.findByRole('group', { name: "User 1's stream" });
   // User 1 has the focus now; User 0 became a small, muted background tile.
   const tile0 = within(screen.getByRole('group', { name: "User 0's stream" }));
   expect(tile0.getByRole('button', { name: 'Unmute' })).toBeInTheDocument();
@@ -182,8 +194,9 @@ test('cards start streams in a focus or grid layout, up to four at once', async 
   expect(screen.getByRole('group', { name: "User 0's stream" }).querySelector('video')).toBe(video0);
 
   fireEvent.click(cards.getByRole('button', { name: "Watch User 2's stream" }));
+  await screen.findByRole('group', { name: "User 2's stream" });
   fireEvent.click(cards.getByRole('button', { name: "Watch User 3's stream" }));
-  expect(screen.getByText(/You can watch up to 4 streams at once/)).toBeInTheDocument();
+  expect(await screen.findByText(/You can watch up to 4 streams at once/)).toBeInTheDocument();
   expect(cards.getByRole('button', { name: "Watch User 4's stream" })).toBeDisabled();
 
   // Pausing one makes room for another.
@@ -192,4 +205,37 @@ test('cards start streams in a focus or grid layout, up to four at once', async 
   fireEvent.click(within(screen.getByRole('group', { name: "User 1's stream" })).getByRole('button', { name: 'Stop watching' }));
   expect(screen.queryByRole('group', { name: "User 1's stream" })).not.toBeInTheDocument();
   expect(cards.getByRole('button', { name: "Watch User 1's stream" })).toBeInTheDocument();
+});
+
+test('warns before opening a stream the connection may not carry', async () => {
+  const streams = ['s1', 's2'].map((id, i) => ({
+    ...stream,
+    id,
+    state: 'live' as const,
+    bitrate: 1e12, // more than any connection
+    user: { id: `u${i + 10}`, handle: `user${i}`, displayName: `User ${i}` },
+  }));
+  const fetchMock = setup([json(200, { ...room, streams })]);
+  const cards = within(await screen.findByRole('region', { name: 'Live in this room' }));
+  fireEvent.click(cards.getByRole('button', { name: "Watch User 0's stream" }));
+  expect(fetchMock.mock.calls.some(([url]) => url.startsWith('/api/bandwidth-test'))).toBe(false); // one stream: no test
+
+  fireEvent.click(cards.getByRole('button', { name: "Watch User 1's stream" }));
+  const dialog = within(await screen.findByRole('dialog', { name: 'Your connection may not keep up' }));
+  expect(dialog.getByText(/Watching 2 streams needs about 2000000 Mbps/)).toBeInTheDocument();
+  expect(fetchMock.mock.calls.filter(([url]) => url.startsWith('/api/bandwidth-test'))).toHaveLength(1);
+
+  fireEvent.click(dialog.getByRole('button', { name: 'Pause the others' }));
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  const first = within(screen.getByRole('group', { name: "User 0's stream" }));
+  expect(first.getByRole('button', { name: 'Resume' })).toBeInTheDocument();
+  expect(within(screen.getByRole('group', { name: "User 1's stream" })).getByRole('button', { name: 'Pause' }))
+    .toBeInTheDocument();
+
+  // The capacity is measured once per tab.
+  fireEvent.click(first.getByRole('button', { name: 'Stop watching' }));
+  const again = within(screen.getByRole('region', { name: 'Live in this room' }));
+  fireEvent.click(again.getByRole('button', { name: "Watch User 0's stream" }));
+  await screen.findByRole('dialog', { name: 'Your connection may not keep up' });
+  expect(fetchMock.mock.calls.filter(([url]) => url.startsWith('/api/bandwidth-test'))).toHaveLength(1);
 });

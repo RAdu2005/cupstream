@@ -319,7 +319,7 @@ type StartStreamResponse struct {
 
 // ClientMessage is a message from the browser.
 type ClientMessage struct {
-	Type string `json:"type" tstype:"'subscribe' | 'unsubscribe' | 'chat' | 'deleteChat' | 'appGoLive'"`
+	Type string `json:"type" tstype:"'subscribe' | 'unsubscribe' | 'chat' | 'deleteChat' | 'appGoLive' | 'viewerReport'"`
 	// The room; for appGoLive, optionally the room the app should stream
 	// into instead of following the start mode.
 	Room string `json:"room"`
@@ -330,6 +330,32 @@ type ClientMessage struct {
 	ID string `json:"id,omitempty"`
 	// Ref is echoed in an error caused by this message.
 	Ref string `json:"ref,omitempty"`
+	// Report of a viewerReport message.
+	Report *ViewerReport `json:"report,omitempty"`
+}
+
+// ViewerReport is what a viewer's browser measured over the last two
+// seconds for each stream it plays in the room, from its WebRTC statistics
+// (overview, 7.2). The page sends one every two seconds while it plays.
+type ViewerReport struct {
+	// Limited means the viewer's own connection is the bottleneck: every
+	// stream it plays got worse together. Lowering a sender's bitrate would
+	// not help such a viewer.
+	Limited bool `json:"limited"`
+	// CapacityBps is the viewer's estimated download capacity, from a
+	// download test and the throughput it sustained; 0 when unknown.
+	CapacityBps int64          `json:"capacityBps,omitempty"`
+	Streams     []StreamReport `json:"streams"`
+}
+
+type StreamReport struct {
+	StreamID        string  `json:"streamId"`
+	BitrateBps      int64   `json:"bitrateBps"` // received, video and audio
+	LossRatio       float64 `json:"lossRatio"`  // packets lost (0-1)
+	Freezes         int     `json:"freezes"`    // video freezes
+	FramesDropped   int     `json:"framesDropped"`
+	FramesPerSecond float64 `json:"framesPerSecond"`
+	JitterMs        float64 `json:"jitterMs"`
 }
 
 // ChatMessage is a message in a room's chat. CreatedAt is Unix seconds.

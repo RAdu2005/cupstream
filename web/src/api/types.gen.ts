@@ -467,7 +467,7 @@ export interface StartStreamResponse {
  * ClientMessage is a message from the browser.
  */
 export interface ClientMessage {
-  type: 'subscribe' | 'unsubscribe' | 'chat' | 'deleteChat' | 'appGoLive';
+  type: 'subscribe' | 'unsubscribe' | 'chat' | 'deleteChat' | 'appGoLive' | 'viewerReport';
   /**
    * The room; for appGoLive, optionally the room the app should stream
    * into instead of following the start mode.
@@ -486,6 +486,38 @@ export interface ClientMessage {
    * Ref is echoed in an error caused by this message.
    */
   ref?: string;
+  /**
+   * Report of a viewerReport message.
+   */
+  report?: ViewerReport;
+}
+/**
+ * ViewerReport is what a viewer's browser measured over the last two
+ * seconds for each stream it plays in the room, from its WebRTC statistics
+ * (overview, 7.2). The page sends one every two seconds while it plays.
+ */
+export interface ViewerReport {
+  /**
+   * Limited means the viewer's own connection is the bottleneck: every
+   * stream it plays got worse together. Lowering a sender's bitrate would
+   * not help such a viewer.
+   */
+  limited: boolean;
+  /**
+   * CapacityBps is the viewer's estimated download capacity, from a
+   * download test and the throughput it sustained; 0 when unknown.
+   */
+  capacityBps?: number /* int64 */;
+  streams: StreamReport[];
+}
+export interface StreamReport {
+  streamId: string;
+  bitrateBps: number /* int64 */; // received, video and audio
+  lossRatio: number /* float64 */; // packets lost (0-1)
+  freezes: number /* int */; // video freezes
+  framesDropped: number /* int */;
+  framesPerSecond: number /* float64 */;
+  jitterMs: number /* float64 */;
 }
 /**
  * ChatMessage is a message in a room's chat. CreatedAt is Unix seconds.

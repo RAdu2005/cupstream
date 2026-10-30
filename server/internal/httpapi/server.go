@@ -114,6 +114,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/friends/blocked/{id}", requireUser(s.block))
 	mux.Handle("DELETE /api/friends/blocked/{id}", requireUser(s.unblock))
 
+	// Bandwidth warnings: the viewer's download test.
+	mux.HandleFunc("GET /api/bandwidth-test", s.bandwidthTest)
+
 	// Media signaling.
 	mux.HandleFunc("POST /whip", s.Gateway.HandleOBSPublish)
 	mux.HandleFunc("POST /api/streams/{id}/whip", s.Gateway.HandleTokenPublish)
