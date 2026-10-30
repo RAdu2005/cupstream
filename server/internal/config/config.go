@@ -34,7 +34,9 @@ type Config struct {
 	// trusted only on connections from this machine (the tunnel connector).
 	ClientIPHeader string
 	// TLSCert and TLSKey, when both set, make the server speak HTTPS
-	// (a Cloudflare Origin CA certificate in production).
+	// directly instead of plain HTTP. Behind a Cloudflare Tunnel, as in
+	// production, the connector reaches the server over loopback and this
+	// stays unset.
 	TLSCert, TLSKey string
 
 	DBPath string
