@@ -31,7 +31,9 @@ fn windows_build() -> Option<u32> {
 /// Root processes (whose parent has another name) of programs matching
 /// `matches`.
 fn root_processes(matches: impl Fn(&str) -> bool) -> Vec<(u32, String)> {
-    let mut sys = System::new();
+    let Ok(mut sys) = System::new() else {
+        return vec![];
+    };
     sys.refresh_processes(ProcessesToUpdate::All, true);
     let name_of = |pid: Pid| {
         sys.process(pid)

@@ -164,22 +164,25 @@ impl Candidate {
     }
 
     /// The converter in front of the encoder, as a launch description,
-    /// scaled to `height` (keeping the aspect ratio) when given.
+    /// scaled to `height` (keeping the aspect ratio) when given. Its last
+    /// element is the capsfilter "size".
     pub fn upload_description(&self, height: Option<u32>) -> String {
         let size = height.map(|h| format!(",height={h}")).unwrap_or_default();
         match self.upload {
             // A description cannot end with bare caps, hence capsfilter.
             Upload::System => {
-                format!("videoconvertscale ! capsfilter caps=\"video/x-raw,format=I420{size}\"")
+                format!(
+                    "videoconvertscale ! capsfilter name=size caps=\"video/x-raw,format=I420{size}\""
+                )
             }
             Upload::Va => format!(
-                "vapostproc ! capsfilter caps=\"video/x-raw(memory:VAMemory),format=NV12{size}\""
+                "vapostproc add-borders=true ! capsfilter name=size caps=\"video/x-raw(memory:VAMemory),format=NV12{size}\""
             ),
             Upload::Cuda => format!(
-                "cudaupload ! cudaconvertscale ! capsfilter caps=\"video/x-raw(memory:CUDAMemory),format=NV12{size}\""
+                "cudaupload ! cudaconvertscale ! capsfilter name=size caps=\"video/x-raw(memory:CUDAMemory),format=NV12{size}\""
             ),
             Upload::D3d11 => format!(
-                "d3d11upload ! d3d11convert ! capsfilter caps=\"video/x-raw(memory:D3D11Memory),format=NV12{size}\""
+                "d3d11upload ! d3d11convert ! capsfilter name=size caps=\"video/x-raw(memory:D3D11Memory),format=NV12{size}\""
             ),
         }
     }

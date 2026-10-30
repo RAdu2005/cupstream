@@ -111,6 +111,10 @@ impl Publisher {
             &sink,
         ])?;
         log_keyframe_requests(&enc);
+        keep_caps_stable(&parse);
+        if let Some(size) = upload.by_name("size") {
+            lock_size(&enc, size);
+        }
 
         if let Some(audio) = &audio {
             let queue = gst::ElementFactory::make("queue").build()?;
@@ -203,6 +207,64 @@ impl Drop for Publisher {
     fn drop(&mut self) {
         self.stop();
     }
+}
+
+/// whipclientsink cannot renegotiate, so the encoded caps must never
+/// change. Some parsers (h264parse in GStreamer 1.24) first pass the
+/// encoder's caps on and add these fields once they parsed the SPS; they
+/// are dropped so both caps are the same.
+fn keep_caps_stable(parse: &gst::Element) {
+    const ADDED_LATER: [&str; 4] = [
+        "coded-picture-structure",
+        "chroma-format",
+        "bit-depth-luma",
+        "bit-depth-chroma",
+    ];
+    let Some(pad) = parse.static_pad("src") else {
+        return;
+    };
+    pad.add_probe(gst::PadProbeType::EVENT_DOWNSTREAM, |_, info| {
+        if let Some(gst::PadProbeData::Event(ev)) = &mut info.data
+            && let gst::EventView::Caps(c) = ev.view()
+        {
+            let mut caps = c.caps().to_owned();
+            for s in caps.make_mut().iter_mut() {
+                s.remove_fields(ADDED_LATER);
+            }
+            *ev = gst::event::Caps::new(&caps);
+        }
+        gst::PadProbeReturn::Ok
+    });
+}
+
+/// Fixes the encoded size to the first frame's: when a captured window is
+/// resized, later frames are scaled (with borders) to the same size rather
+/// than changing the stream's caps.
+fn lock_size(enc: &gst::Element, size: gst::Element) {
+    let Some(pad) = enc.static_pad("sink") else {
+        return;
+    };
+    let size = size.downgrade();
+    pad.add_probe(gst::PadProbeType::EVENT_DOWNSTREAM, move |_, info| {
+        let Some(gst::PadProbeData::Event(ev)) = &info.data else {
+            return gst::PadProbeReturn::Ok;
+        };
+        let gst::EventView::Caps(c) = ev.view() else {
+            return gst::PadProbeReturn::Ok;
+        };
+        let (Some(size), Some(s)) = (size.upgrade(), c.caps().structure(0)) else {
+            return gst::PadProbeReturn::Remove;
+        };
+        if let (Ok(w), Ok(h)) = (s.get::<i32>("width"), s.get::<i32>("height")) {
+            let mut caps = size.property::<gst::Caps>("caps");
+            if let Some(st) = caps.make_mut().structure_mut(0) {
+                st.set("width", w);
+                st.set("height", h);
+            }
+            size.set_property("caps", caps);
+        }
+        gst::PadProbeReturn::Remove
+    });
 }
 
 /// Logs the keyframe requests that reach the encoder: a viewer joined or
