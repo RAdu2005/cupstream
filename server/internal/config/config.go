@@ -42,6 +42,12 @@ type Config struct {
 	MediaMTXAPI    *url.URL
 	MediaMTXWebRTC *url.URL
 
+	// EgressLimit is the outgoing traffic, in bits per second, above which
+	// new viewers are refused (0: never). EgressInterfaces are the network
+	// interfaces measured; empty means every physical one.
+	EgressLimit      int64
+	EgressInterfaces []string
+
 	// DevLogin enables the passwordless development login. It is refused
 	// unless PublicURL is a local development host.
 	DevLogin bool
@@ -116,6 +122,19 @@ func load(getenv func(string) string) (*Config, error) {
 	for name, oc := range map[string]OAuthClient{"GOOGLE": c.Google, "DISCORD": c.Discord} {
 		if (oc.ID == "") != (oc.Secret == "") {
 			errs = append(errs, fmt.Errorf("CUPSTREAM_%s_CLIENT_ID and CUPSTREAM_%s_CLIENT_SECRET must be set together", name, name))
+		}
+	}
+
+	if raw := get("EGRESS_LIMIT_MBPS", "800"); raw != "" {
+		mbps, err := strconv.ParseFloat(raw, 64)
+		if err != nil || mbps < 0 {
+			errs = append(errs, fmt.Errorf("CUPSTREAM_EGRESS_LIMIT_MBPS: %q is not a number of megabits per second", raw))
+		}
+		c.EgressLimit = int64(mbps * 1e6)
+	}
+	for name := range strings.SplitSeq(get("EGRESS_INTERFACE", ""), ",") {
+		if name = strings.TrimSpace(name); name != "" {
+			c.EgressInterfaces = append(c.EgressInterfaces, name)
 		}
 	}
 

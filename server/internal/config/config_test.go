@@ -22,7 +22,7 @@ func TestDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Addr != ":8080" || c.DevLogin || c.NoRateLimits || c.SecureCookies() || c.MediaMTXAPI.String() != "http://127.0.0.1:9997" {
+	if c.Addr != ":8080" || c.DevLogin || c.NoRateLimits || c.EgressLimit != 800_000_000 || c.EgressInterfaces != nil || c.SecureCookies() || c.MediaMTXAPI.String() != "http://127.0.0.1:9997" {
 		t.Fatalf("unexpected defaults: %+v", c)
 	}
 }
@@ -38,6 +38,7 @@ func TestErrors(t *testing.T) {
 		"missing secret key":       {"CUPSTREAM_SECRET_KEY": ""},
 		"short secret key":         {"CUPSTREAM_SECRET_KEY": "c2hvcnQ="},
 		"half google client":       {"CUPSTREAM_GOOGLE_CLIENT_ID": "id"},
+		"bad egress limit":         {"CUPSTREAM_EGRESS_LIMIT_MBPS": "-1"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := load(env(vars)); err == nil {
@@ -70,5 +71,12 @@ func TestDevLoginGeneratesSecretKey(t *testing.T) {
 	c, err := load(env(map[string]string{"CUPSTREAM_DEV_LOGIN": "1", "CUPSTREAM_SECRET_KEY": ""}))
 	if err != nil || len(c.SecretKey) != 32 || !c.SecretKeyGenerated {
 		t.Fatalf("got %v, generated=%v", err, c != nil && c.SecretKeyGenerated)
+	}
+}
+
+func TestEgress(t *testing.T) {
+	c, err := load(env(map[string]string{"CUPSTREAM_EGRESS_LIMIT_MBPS": "0.5", "CUPSTREAM_EGRESS_INTERFACE": "eno1, eno2"}))
+	if err != nil || c.EgressLimit != 500_000 || len(c.EgressInterfaces) != 2 || c.EgressInterfaces[1] != "eno2" {
+		t.Fatalf("got %v, %+v", err, c)
 	}
 }

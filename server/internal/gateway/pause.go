@@ -137,6 +137,9 @@ func (g *Gateway) SetViewerPaused(ctx context.Context, streamID, secret string, 
 		return errTooManyStreams
 	}
 	g.mu.Unlock()
+	if !paused && t.Video && before.Video && !g.admit(streamID) {
+		return errServerFull
+	}
 
 	if err := g.applyPause(ctx, sess.mtxID, before, after); err != nil {
 		if errors.Is(err, mediamtx.ErrNotFound) {
@@ -247,6 +250,8 @@ func (g *Gateway) HandleSessionControl(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, CodeTooManyStreams, err.Error())
 	case errors.Is(err, errPauseUnsupported):
 		writeErr(w, http.StatusNotImplemented, "pause_unsupported", err.Error())
+	case errors.Is(err, errServerFull):
+		writeServerFull(w)
 	case errors.As(err, &ae):
 		writeErr(w, http.StatusForbidden, string(ae.reason), ae.Error())
 	default:
