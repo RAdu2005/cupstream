@@ -44,6 +44,11 @@ const (
 	defaultTabGrace = 15 * time.Second
 	// How long shutting down waits for connections to close.
 	shutdownTimeout = 3 * time.Second
+	// Connections one signed-in user may have open at once (one per tab),
+	// and one client address, signed in or not; friends behind one home
+	// connection share an address.
+	defaultMaxConnsPerUser = 20
+	defaultMaxConnsPerAddr = 50
 )
 
 type Hub struct {
@@ -56,6 +61,9 @@ type Hub struct {
 	// TabGrace is how long a browser tab may be without a connection before
 	// the media sessions it opened are closed. Set it before serving.
 	TabGrace time.Duration
+	// MaxConnsPerUser and MaxConnsPerAddr cap the connections of one user
+	// and one client address. Set them before serving.
+	MaxConnsPerUser, MaxConnsPerAddr int
 
 	chatLimit *ratelimit.Limiter
 
@@ -65,6 +73,8 @@ type Hub struct {
 	subs   map[string]*roomSubs // by room ID
 	tabs   map[tabKey]*tabState
 	wg     sync.WaitGroup // connection handlers
+	// Open connections (and ones being opened) by user and by address.
+	perUser, perAddr map[string]int
 }
 
 // roomSubs is a room with subscribers, and what they were last sent.
@@ -78,11 +88,15 @@ type roomSubs struct {
 func New(db *store.DB, rs *rooms.Service, gw *gateway.Gateway, cfg *config.Config) *Hub {
 	return &Hub{
 		db: db, rooms: rs, gw: gw, cfg: cfg, now: time.Now,
-		TabGrace:  defaultTabGrace,
-		chatLimit: ratelimit.New(chatBurst, chatRefill),
-		conns:     map[*conn]struct{}{},
-		subs:      map[string]*roomSubs{},
-		tabs:      map[tabKey]*tabState{},
+		TabGrace:        defaultTabGrace,
+		MaxConnsPerUser: defaultMaxConnsPerUser,
+		MaxConnsPerAddr: defaultMaxConnsPerAddr,
+		chatLimit:       ratelimit.New(chatBurst, chatRefill),
+		conns:           map[*conn]struct{}{},
+		subs:            map[string]*roomSubs{},
+		tabs:            map[tabKey]*tabState{},
+		perUser:         map[string]int{},
+		perAddr:         map[string]int{},
 	}
 }
 
