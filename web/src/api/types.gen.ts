@@ -418,14 +418,19 @@ export interface StartStreamResponse {
  * ClientMessage is a message from the browser.
  */
 export interface ClientMessage {
-  type: 'subscribe' | 'unsubscribe' | 'chat' | 'deleteChat';
+  type: 'subscribe' | 'unsubscribe' | 'chat' | 'deleteChat' | 'appGoLive';
+  /**
+   * The room; for appGoLive, optionally the room the app should stream
+   * into instead of following the start mode.
+   */
   room: string;
   /**
    * Body of a chat message.
    */
   body?: string;
   /**
-   * ID of the chat message to delete.
+   * ID of the chat message to delete, or for appGoLive, of the desktop
+   * app to ask (an AppInstance ID; empty: the one that connected last).
    */
   id?: string;
   /**
@@ -557,8 +562,35 @@ export interface ChatDeleted {
   id: string;
 }
 /**
+ * AppInstance is one of the user's desktop apps that is running and
+ * connected. ID is its session's ID.
+ */
+export interface AppInstance {
+  id: string;
+  deviceName: string;
+}
+/**
+ * AppsEvent lists the user's running desktop apps. Each of the user's
+ * connections gets it when it connects and whenever the list changes, so
+ * the website can offer going live from the app.
+ */
+export interface AppsEvent {
+  type: 'apps';
+  apps: AppInstance[];
+}
+/**
+ * AppGoLive asks the desktop app to open its screen picker and go live,
+ * after the user chose the app on the website (client message appGoLive).
+ * Room is the room to stream into; empty means the user's start mode.
+ */
+export interface AppGoLive {
+  type: 'goLive';
+  room?: string;
+}
+/**
  * RealtimeError answers a client message that failed. Code is e.g.
- * "rate_limited", "sign_in_required", "not_allowed" or "invalid".
+ * "rate_limited", "sign_in_required", "not_allowed", "app_offline" or
+ * "invalid".
  */
 export interface RealtimeError {
   type: 'error';

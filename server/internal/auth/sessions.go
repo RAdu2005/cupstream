@@ -139,9 +139,10 @@ func (s *Sessions) cookie(value string, maxAge int) *http.Cookie {
 
 // Current is the signed-in user and session of a request.
 type Current struct {
-	SessionID string
-	Kind      Kind
-	User      store.User
+	SessionID  string
+	Kind       Kind
+	DeviceName string // desktop-app sessions
+	User       store.User
 }
 
 type ctxKey struct{}
@@ -203,7 +204,7 @@ func (s *Sessions) Middleware(next http.Handler) http.Handler {
 			}
 		}
 
-		ctx := context.WithValue(r.Context(), ctxKey{}, Current{SessionID: row.Session.ID, Kind: kind, User: row.User})
+		ctx := context.WithValue(r.Context(), ctxKey{}, Current{SessionID: row.Session.ID, Kind: kind, DeviceName: row.Session.DeviceName, User: row.User})
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

@@ -297,11 +297,14 @@ type StartStreamResponse struct {
 
 // ClientMessage is a message from the browser.
 type ClientMessage struct {
-	Type string `json:"type" tstype:"'subscribe' | 'unsubscribe' | 'chat' | 'deleteChat'"`
+	Type string `json:"type" tstype:"'subscribe' | 'unsubscribe' | 'chat' | 'deleteChat' | 'appGoLive'"`
+	// The room; for appGoLive, optionally the room the app should stream
+	// into instead of following the start mode.
 	Room string `json:"room"`
 	// Body of a chat message.
 	Body string `json:"body,omitempty"`
-	// ID of the chat message to delete.
+	// ID of the chat message to delete, or for appGoLive, of the desktop
+	// app to ask (an AppInstance ID; empty: the one that connected last).
 	ID string `json:"id,omitempty"`
 	// Ref is echoed in an error caused by this message.
 	Ref string `json:"ref,omitempty"`
@@ -416,8 +419,32 @@ type ChatDeleted struct {
 	ID   string `json:"id"`
 }
 
+// AppInstance is one of the user's desktop apps that is running and
+// connected. ID is its session's ID.
+type AppInstance struct {
+	ID         string `json:"id"`
+	DeviceName string `json:"deviceName"`
+}
+
+// AppsEvent lists the user's running desktop apps. Each of the user's
+// connections gets it when it connects and whenever the list changes, so
+// the website can offer going live from the app.
+type AppsEvent struct {
+	Type string        `json:"type" tstype:"'apps'"`
+	Apps []AppInstance `json:"apps"`
+}
+
+// AppGoLive asks the desktop app to open its screen picker and go live,
+// after the user chose the app on the website (client message appGoLive).
+// Room is the room to stream into; empty means the user's start mode.
+type AppGoLive struct {
+	Type string `json:"type" tstype:"'goLive'"`
+	Room string `json:"room,omitempty"`
+}
+
 // RealtimeError answers a client message that failed. Code is e.g.
-// "rate_limited", "sign_in_required", "not_allowed" or "invalid".
+// "rate_limited", "sign_in_required", "not_allowed", "app_offline" or
+// "invalid".
 type RealtimeError struct {
 	Type  string `json:"type" tstype:"'error'"`
 	Room  string `json:"room,omitempty"`

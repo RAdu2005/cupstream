@@ -72,7 +72,8 @@ type Hub struct {
 	conns  map[*conn]struct{}
 	subs   map[string]*roomSubs // by room ID
 	tabs   map[tabKey]*tabState
-	wg     sync.WaitGroup // connection handlers
+	apps   map[string][]*conn // running desktop apps by user ID
+	wg     sync.WaitGroup     // connection handlers
 	// Open connections (and ones being opened) by user and by address.
 	perUser, perAddr map[string]int
 }
@@ -97,6 +98,7 @@ func New(db *store.DB, rs *rooms.Service, gw *gateway.Gateway, cfg *config.Confi
 		tabs:            map[tabKey]*tabState{},
 		perUser:         map[string]int{},
 		perAddr:         map[string]int{},
+		apps:            map[string][]*conn{},
 	}
 }
 

@@ -1,12 +1,18 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/coder/websocket"
+	"github.com/google/uuid"
 
 	"github.com/RAdu2005/cupstream/server/internal/api"
 )
@@ -99,4 +105,90 @@ func TestAppAuthorizeRefusals(t *testing.T) {
 	if r := web.do("POST", "/api/app/authorize", raw, "Origin", "https://evil.example", "Sec-Fetch-Site", "cross-site"); r.status != http.StatusForbidden {
 		t.Fatalf("cross-site approval = %d", r.status)
 	}
+}
+
+// appSignIn signs the desktop app in for the browser's user and returns the
+// app's token.
+func (b *browser) appSignIn(device string) string {
+	b.t.Helper()
+	verifier := strings.Repeat("y", 50)
+	sum := sha256.Sum256([]byte(verifier))
+	redirect := "http://127.0.0.1:43210/callback"
+	var approved api.AppAuthorizeResponse
+	b.json("POST", "/api/app/authorize", api.AppAuthorizeRequest{
+		RedirectURI: redirect, CodeChallenge: base64.RawURLEncoding.EncodeToString(sum[:]),
+		CodeChallengeMethod: "S256", DeviceName: device,
+	}, &approved, http.StatusOK)
+	back, _ := url.Parse(approved.Redirect)
+	var tok api.AppToken
+	b.e.browser(b.t).json("POST", "/api/app/token", api.AppTokenRequest{
+		Code: back.Query().Get("code"), CodeVerifier: verifier, RedirectURI: redirect,
+	}, &tok, http.StatusOK)
+	return tok.Token
+}
+
+// connectApp opens the realtime WebSocket the way the desktop app does:
+// with its Bearer token, without an Origin or a tab.
+func (e *testEnv) connectApp(t *testing.T, token string) *socket {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	url := "ws" + strings.TrimPrefix(e.srv.URL, "http") + "/api/realtime"
+	ws, resp, err := websocket.Dial(ctx, url, &websocket.DialOptions{HTTPHeader: http.Header{"Authorization": {"Bearer " + token}}})
+	if err != nil {
+		if resp != nil {
+			b, _ := io.ReadAll(resp.Body)
+			t.Fatalf("%v: %s", err, b)
+		}
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ws.CloseNow() })
+	return &socket{t: t, ws: ws}
+}
+
+func TestAppPresence(t *testing.T) {
+	e := newTestEnv(t, envOptions{devLogin: true})
+	web := e.browser(t)
+	web.devLogin("alice")
+	bob := e.browser(t)
+	bob.devLogin("bob")
+	tab := web.connect(uuid.NewString())
+	bobTab := bob.connect(uuid.NewString())
+	if got := next[api.AppsEvent](tab, "apps"); len(got.Apps) != 0 {
+		t.Fatalf("apps before the app runs = %+v", got.Apps)
+	}
+	next[api.AppsEvent](bobTab, "apps")
+
+	// Nothing to ask while the app is not running.
+	tab.send(api.ClientMessage{Type: "appGoLive", Ref: "r1"})
+	if e := next[api.RealtimeError](tab, "error"); e.Code != "app_offline" || e.Ref != "r1" {
+		t.Fatalf("error = %+v", e)
+	}
+
+	app := e.connectApp(t, web.appSignIn("alice-pc"))
+	got := next[api.AppsEvent](tab, "apps", func(ev api.AppsEvent) bool { return len(ev.Apps) == 1 })
+	if got.Apps[0].DeviceName != "alice-pc" || got.Apps[0].ID == "" {
+		t.Fatalf("apps = %+v", got.Apps)
+	}
+	// A tab that connects later learns about it at once.
+	if late := next[api.AppsEvent](web.connect(uuid.NewString()), "apps"); len(late.Apps) != 1 {
+		t.Fatalf("apps on connect = %+v", late.Apps)
+	}
+
+	tab.send(api.ClientMessage{Type: "appGoLive", Room: "some-room"})
+	if g := next[api.AppGoLive](app, "goLive"); g.Room != "some-room" {
+		t.Fatalf("goLive = %+v", g)
+	}
+	// The app cannot ask itself, and nobody else can ask it.
+	app.send(api.ClientMessage{Type: "appGoLive", Ref: "r2"})
+	if e := next[api.RealtimeError](app, "error"); e.Code != "invalid" {
+		t.Fatalf("app asking = %+v", e)
+	}
+	bobTab.send(api.ClientMessage{Type: "appGoLive", Ref: "r3"})
+	if e := next[api.RealtimeError](bobTab, "error"); e.Code != "app_offline" {
+		t.Fatalf("bob asking = %+v", e)
+	}
+
+	app.ws.Close(websocket.StatusNormalClosure, "")
+	next[api.AppsEvent](tab, "apps", func(ev api.AppsEvent) bool { return len(ev.Apps) == 0 })
 }
