@@ -56,3 +56,14 @@ WHERE (room_passes.expires_at IS NOT NULL AND room_passes.expires_at <= excluded
 
 -- name: MoveStream :exec
 UPDATE streams SET room_id = ? WHERE id = ? AND ended_at IS NULL;
+
+-- name: ListStatusMessages :many
+SELECT * FROM discord_status_messages;
+
+-- name: UpsertStatusMessage :exec
+INSERT INTO discord_status_messages (channel_id, guild_id, message_id, created_at)
+VALUES (?, ?, ?, ?)
+ON CONFLICT (channel_id) DO UPDATE SET message_id = excluded.message_id, created_at = excluded.created_at;
+
+-- name: DeleteStatusMessage :exec
+DELETE FROM discord_status_messages WHERE channel_id = ?;

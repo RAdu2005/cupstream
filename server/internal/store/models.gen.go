@@ -24,6 +24,13 @@ type DiscordGuild struct {
 	CreatedAt       int64
 }
 
+type DiscordStatusMessage struct {
+	ChannelID string
+	GuildID   string
+	MessageID string
+	CreatedAt int64
+}
+
 type DiscordToken struct {
 	UserID                string
 	EncryptedRefreshToken []byte
