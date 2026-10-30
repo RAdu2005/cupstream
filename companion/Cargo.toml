@@ -1,0 +1,25 @@
+[workspace]
+resolver = "3"
+members = ["client", "media", "cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
+publish = false
+
+[workspace.dependencies]
+anyhow = "1"
+gst = { package = "gstreamer", version = "0.25", features = ["v1_24"] }
+gst-video = { package = "gstreamer-video", version = "0.25", features = ["v1_24"] }
+gst-webrtc = { package = "gstreamer-webrtc", version = "0.25", features = ["v1_24"] }
+# whipclientsink, built into the app so no GStreamer Rust plugins need to be
+# installed. ring rather than aws-lc-rs: no cmake or nasm needed to build.
+gst-plugin-webrtc = { version = "0.15", default-features = false, features = ["whip", "whep", "rustls-ring"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider", "charset", "http2", "system-proxy"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signal", "sync", "net", "io-util"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
