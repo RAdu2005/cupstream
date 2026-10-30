@@ -39,15 +39,18 @@ type SendFriendRequest struct {
 // a room, so they have no "room".
 
 // Notification is something to tell the user about at once, wherever they
-// are on the site: User sent them a friend request or accepted theirs.
+// are on the site: User sent them a friend request, accepted theirs, or
+// went live in RoomSlug, a room the user may enter.
 type Notification struct {
-	Type string `json:"type" tstype:"'notification'"`
-	Kind string `json:"kind" tstype:"'friendRequest' | 'friendAccepted'"`
-	User User   `json:"user"`
+	Type     string `json:"type" tstype:"'notification'"`
+	Kind     string `json:"kind" tstype:"'friendRequest' | 'friendAccepted' | 'friendLive'"`
+	User     User   `json:"user"`
+	RoomSlug string `json:"roomSlug,omitempty"` // friendLive
 }
 
-// FriendsChanged means the user's friends or requests changed; the client
-// fetches them again.
+// FriendsChanged means the user's friends, requests or friends' live
+// streams (GET /api/friends/live) may have changed; the client fetches them
+// again.
 type FriendsChanged struct {
 	Type string `json:"type" tstype:"'friendsChanged'"`
 }
@@ -64,4 +67,18 @@ type SharedGuild struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`
 	IconURL string `json:"iconUrl,omitempty"`
+}
+
+// LiveFriend is a friend's active stream in a room the user may enter. GET
+// /api/friends/live lists them, oldest first; Stream.User is the friend.
+type LiveFriend struct {
+	Stream Stream  `json:"stream"`
+	Room   RoomRef `json:"room"`
+}
+
+// RoomRef names a room without its contents.
+type RoomRef struct {
+	Slug  string `json:"slug"`
+	Kind  string `json:"kind" tstype:"'link' | 'discord'"`
+	Owner *User  `json:"owner,omitempty"` // link rooms
 }

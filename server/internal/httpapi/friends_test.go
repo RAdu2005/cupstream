@@ -134,3 +134,64 @@ func TestFriendSuggestions(t *testing.T) {
 	}
 	bob.json("DELETE", "/api/friends/suggestions/nobody", nil, nil, http.StatusNotFound)
 }
+
+// TestFriendsLive: friends see each other's streams, and are told when one
+// goes live, only in rooms they may enter.
+func TestFriendsLive(t *testing.T) {
+	e := newTestEnv(t, envOptions{devLogin: true})
+	alice, bob, carol, dave := e.browser(t), e.browser(t), e.browser(t), e.browser(t)
+	a := alice.devLogin("alice")
+	b := bob.devLogin("bob")
+	c := carol.devLogin("carol")
+	dave.devLogin("dave")
+	for _, f := range []*browser{bob, carol} {
+		f.json("POST", "/api/friends/requests", api.SendFriendRequest{UserID: a.ID}, nil, 200)
+		alice.json("POST", "/api/friends/requests/"+map[*browser]string{bob: b.ID, carol: c.ID}[f]+"/accept", nil, nil, 200)
+	}
+	// Bob and Dave (not a friend) may enter Alice's invite-only room; Carol may not.
+	slug := alice.roomSlug()
+	alice.json("PUT", "/api/rooms/"+slug+"/allowed/bob", api.SetAllowedRequest{}, nil, 200)
+	alice.json("PUT", "/api/rooms/"+slug+"/allowed/dave", api.SetAllowedRequest{}, nil, 200)
+	bs, cs := bob.connect("bob-tab-1"), carol.connect("carol-tab")
+
+	if r := alice.obs(alice.streamKey(), "", h264Offer); r.status != http.StatusCreated {
+		t.Fatalf("OBS = %d %s", r.status, r.body)
+	}
+	e.reconcile(t)
+	n := next(bs, "notification", func(n api.Notification) bool { return n.Kind == "friendLive" })
+	if n.User.ID != a.ID || n.RoomSlug != slug {
+		t.Fatalf("bob's notification = %+v", n)
+	}
+
+	var live []api.LiveFriend
+	bob.json("GET", "/api/friends/live", nil, &live, 200)
+	if len(live) != 1 || live[0].Stream.User.ID != a.ID || live[0].Stream.State != "live" ||
+		live[0].Room.Slug != slug || live[0].Room.Kind != "link" || live[0].Room.Owner == nil || live[0].Room.Owner.ID != a.ID {
+		t.Fatalf("bob's friends live = %+v", live)
+	}
+	for _, other := range []*browser{carol, dave} {
+		other.json("GET", "/api/friends/live", nil, &live, 200)
+		if len(live) != 0 {
+			t.Fatalf("friends live of someone not allowed = %+v", live)
+		}
+	}
+
+	// Letting Carol in tells her to look again.
+	alice.json("PUT", "/api/rooms/"+slug+"/allowed/carol", api.SetAllowedRequest{}, nil, 200)
+	next[api.FriendsChanged](cs, "friendsChanged")
+	carol.json("GET", "/api/friends/live", nil, &live, 200)
+	if len(live) != 1 {
+		t.Fatalf("carol's friends live after being allowed = %+v", live)
+	}
+
+	// The stream ending tells them too (on a new tab, so that nothing
+	// from before is still queued; subscribing makes sure it is connected).
+	bs2 := bob.connect("bob-tab-2")
+	bs2.subscribe(slug)
+	alice.json("DELETE", "/api/streams/"+live[0].Stream.ID, nil, nil, http.StatusNoContent)
+	next[api.FriendsChanged](bs2, "friendsChanged")
+	bob.json("GET", "/api/friends/live", nil, &live, 200)
+	if len(live) != 0 {
+		t.Fatalf("bob's friends live after the stream = %+v", live)
+	}
+}

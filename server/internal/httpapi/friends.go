@@ -1,9 +1,11 @@
 package httpapi
 
 import (
+	"database/sql"
 	"errors"
 	"net/http"
 
+	"github.com/RAdu2005/cupstream/server/internal/access"
 	"github.com/RAdu2005/cupstream/server/internal/api"
 	"github.com/RAdu2005/cupstream/server/internal/auth"
 	"github.com/RAdu2005/cupstream/server/internal/friends"
@@ -182,4 +184,58 @@ func (s *Server) dismissSuggestion(w http.ResponseWriter, r *http.Request, cur a
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// friendsLive serves GET /api/friends/live: friends' streams in rooms the
+// user may enter.
+func (s *Server) friendsLive(w http.ResponseWriter, r *http.Request, cur auth.Current) {
+	ctx := r.Context()
+	ids, err := s.Friends.FriendIDs(ctx, cur.User.ID)
+	if err != nil {
+		internalError(w, r, err)
+		return
+	}
+	friend := map[string]bool{}
+	for _, id := range ids {
+		friend[id] = true
+	}
+	out := []api.LiveFriend{}
+	users := view.Users{DB: s.DB}
+	for _, ls := range s.Gateway.ActiveStreams() {
+		if !friend[ls.Stream.UserID] {
+			continue
+		}
+		room, err := s.DB.GetRoom(ctx, ls.Stream.RoomID)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			internalError(w, r, err)
+			return
+		}
+		reason, err := s.Rooms.Check(ctx, room, cur.User.ID, access.Watch)
+		if err != nil {
+			internalError(w, r, err)
+			return
+		}
+		if reason != access.OK {
+			continue
+		}
+		st, err := view.Stream(ctx, &users, ls)
+		if err != nil {
+			internalError(w, r, err)
+			return
+		}
+		ref := api.RoomRef{Slug: room.Slug, Kind: room.Kind}
+		if room.OwnerID.Valid {
+			owner, err := users.Get(ctx, room.OwnerID.String)
+			if err != nil {
+				internalError(w, r, err)
+				return
+			}
+			ref.Owner = &owner
+		}
+		out = append(out, api.LiveFriend{Stream: st, Room: ref})
+	}
+	writeJSON(w, http.StatusOK, out)
 }
