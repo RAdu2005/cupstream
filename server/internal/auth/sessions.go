@@ -1,5 +1,6 @@
-// Package auth handles accounts and sessions: opaque session tokens in an
-// HttpOnly cookie, stored hashed in the database.
+// Package auth handles accounts and sessions: opaque session tokens, stored
+// hashed in the database, in an HttpOnly cookie for the website and as a
+// Bearer token for the desktop app.
 package auth
 
 import (
@@ -11,6 +12,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -69,8 +71,23 @@ func HashToken(token string) []byte {
 	return h[:]
 }
 
-// Start creates a session for userID and sets the session cookie.
-func (s *Sessions) Start(ctx context.Context, w http.ResponseWriter, userID string, kind Kind, deviceName string) error {
+// Start creates a website session for userID and sets the session cookie.
+func (s *Sessions) Start(ctx context.Context, w http.ResponseWriter, userID string) error {
+	token, err := s.create(ctx, userID, KindWeb, "")
+	if err != nil {
+		return err
+	}
+	http.SetCookie(w, s.cookie(token, int(sessionTTL.Seconds())))
+	return nil
+}
+
+// StartApp creates a desktop-app session for userID and returns its token,
+// which the app sends as a Bearer token.
+func (s *Sessions) StartApp(ctx context.Context, userID, deviceName string) (string, error) {
+	return s.create(ctx, userID, KindApp, deviceName)
+}
+
+func (s *Sessions) create(ctx context.Context, userID string, kind Kind, deviceName string) (string, error) {
 	token, hash := NewToken()
 	now := s.now()
 	err := s.db.CreateSession(ctx, store.CreateSessionParams{
@@ -83,21 +100,29 @@ func (s *Sessions) Start(ctx context.Context, w http.ResponseWriter, userID stri
 		ExpiresAt:  now.Add(sessionTTL).Unix(),
 		LastSeenAt: now.Unix(),
 	})
-	if err != nil {
-		return err
-	}
-	http.SetCookie(w, s.cookie(token, int(sessionTTL.Seconds())))
-	return nil
+	return token, err
 }
 
 // End deletes the request's session, if any, and clears the cookie.
 func (s *Sessions) End(ctx context.Context, w http.ResponseWriter, r *http.Request) error {
+	if token := bearer(r); token != "" {
+		return s.db.DeleteSessionByTokenHash(ctx, HashToken(token))
+	}
 	http.SetCookie(w, s.cookie("", -1))
 	c, err := r.Cookie(s.name)
 	if err != nil {
 		return nil
 	}
 	return s.db.DeleteSessionByTokenHash(ctx, HashToken(c.Value))
+}
+
+// bearer returns the request's Bearer token, or "".
+func bearer(r *http.Request) string {
+	scheme, token, ok := strings.Cut(r.Header.Get("Authorization"), " ")
+	if !ok || !strings.EqualFold(scheme, "Bearer") {
+		return ""
+	}
+	return strings.TrimSpace(token)
 }
 
 func (s *Sessions) cookie(value string, maxAge int) *http.Cookie {
@@ -115,6 +140,7 @@ func (s *Sessions) cookie(value string, maxAge int) *http.Cookie {
 // Current is the signed-in user and session of a request.
 type Current struct {
 	SessionID string
+	Kind      Kind
 	User      store.User
 }
 
@@ -126,21 +152,35 @@ func FromContext(ctx context.Context) (Current, bool) {
 	return c, ok
 }
 
-// Middleware resolves the session cookie and stores the result in the request
-// context. Requests without a valid session pass through anonymously.
+// Middleware resolves the session cookie, or the desktop app's Bearer token
+// on /api/ paths, and stores the result in the request context. Requests
+// without a valid session pass through anonymously.
 func (s *Sessions) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c, err := r.Cookie(s.name)
-		if err != nil || c.Value == "" {
+		// Outside /api/, Bearer tokens are OBS stream keys. Inside it, a
+		// stream's publish token is not a session either and simply finds
+		// none.
+		kind, token := KindApp, ""
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			token = bearer(r)
+		}
+		if token == "" {
+			kind = KindWeb
+			if c, err := r.Cookie(s.name); err == nil {
+				token = c.Value
+			}
+		}
+		if token == "" {
 			next.ServeHTTP(w, r)
 			return
 		}
 		now := s.now()
 		row, err := s.db.GetSessionByTokenHash(r.Context(), store.GetSessionByTokenHashParams{
-			TokenHash: HashToken(c.Value),
+			TokenHash: HashToken(token),
 			ExpiresAt: now.Unix(),
 		})
-		if errors.Is(err, sql.ErrNoRows) {
+		// A token is only accepted the way its kind is sent.
+		if errors.Is(err, sql.ErrNoRows) || err == nil && row.Session.Kind != string(kind) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -158,12 +198,12 @@ func (s *Sessions) Middleware(next http.Handler) http.Handler {
 			})
 			if err != nil {
 				slog.WarnContext(r.Context(), "session touch failed", "err", err)
-			} else if row.Session.Kind == string(KindWeb) {
-				http.SetCookie(w, s.cookie(c.Value, int(sessionTTL.Seconds())))
+			} else if kind == KindWeb {
+				http.SetCookie(w, s.cookie(token, int(sessionTTL.Seconds())))
 			}
 		}
 
-		ctx := context.WithValue(r.Context(), ctxKey{}, Current{SessionID: row.Session.ID, User: row.User})
+		ctx := context.WithValue(r.Context(), ctxKey{}, Current{SessionID: row.Session.ID, Kind: kind, User: row.User})
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

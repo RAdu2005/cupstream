@@ -65,7 +65,7 @@ func newTestEnv(t *testing.T, o envOptions) *testEnv {
 	cfg := &config.Config{PublicURL: &url.URL{Scheme: "http", Host: "localhost"}, DevLogin: o.devLogin}
 	deps := Deps{
 		Config: cfg, Version: "test", DB: db, Sealer: sealer, Sessions: auth.NewSessions(db, false),
-		Rooms: rs, MediaMTX: media, Providers: map[string]oauth.Provider{},
+		AppCodes: auth.NewAppCodes(), Rooms: rs, MediaMTX: media, Providers: map[string]oauth.Provider{},
 		Web: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "website") }),
 	}
 	if o.oauth {

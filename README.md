@@ -41,6 +41,10 @@ The development login needs no setup. To try the real providers locally, create 
 - **Google:** in the Google Cloud console, create an OAuth client of type *Web application* with the redirect URI `http://localhost:5173/api/auth/google/callback`. Scopes: `openid` and `profile`.
 - **Discord:** in the Discord developer portal, create an application and add the redirect `http://localhost:5173/api/auth/discord/callback` under OAuth2. Scopes: `identify` and `guilds`.
 
+### Desktop app sign-in
+
+The desktop app signs in like a native OAuth client (RFC 8252, with PKCE). It listens on `http://127.0.0.1:<port>/`, opens `/app/authorize?redirect_uri=…&state=…&code_challenge=…&code_challenge_method=S256&device_name=…` in the system browser, and the signed-in user approves it there. The browser is sent back to the app with a one-time code, valid for a minute, which the app exchanges at `POST /api/app/token` for an app session. The app keeps that token in the system keychain and sends it as `Authorization: Bearer` on `/api/` requests, including the realtime WebSocket; `POST /api/auth/logout` with it signs the app out, and the user can revoke it under Settings, Sessions.
+
 ### Realtime
 
 Each browser tab opens one WebSocket, `GET /api/realtime?tab=<id>`, and subscribes to rooms over it; the messages are the `ClientMessage` and event types in `server/internal/api`. It carries live streams and viewer counts, presence, chat (kept 24 hours) and, for streamers, their viewers' statistics, so the room page does not poll. Only pages on `CUPSTREAM_PUBLIC_URL`'s origin may connect, and the server pings every 30 seconds so Cloudflare does not close idle connections. WHEP requests pass the same tab ID; when a tab's WebSocket has been gone for 15 seconds, the media sessions it opened are closed.

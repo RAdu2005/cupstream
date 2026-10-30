@@ -110,6 +110,7 @@ func run() error {
 			Sealer:    sealer,
 			Sessions:  sessions,
 			Accounts:  auth.NewAccounts(db, discord),
+			AppCodes:  auth.NewAppCodes(),
 			Discord:   discord,
 			Providers: providers,
 			Rooms:     roomService,

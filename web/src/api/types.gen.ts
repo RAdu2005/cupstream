@@ -40,6 +40,42 @@ export interface DevLoginRequest {
   handle: string;
 }
 /**
+ * AppAuthorizeRequest is the body of POST /api/app/authorize: the signed-in
+ * user approves the desktop app's sign-in request, whose parameters the app
+ * put in the /app/authorize page's query string.
+ */
+export interface AppAuthorizeRequest {
+  redirectUri: string; // the app's loopback address
+  state: string;
+  codeChallenge: string;
+  codeChallengeMethod: 'S256';
+  deviceName: string;
+}
+/**
+ * AppAuthorizeResponse tells the page where to send the browser: the app's
+ * redirect URI with a one-time code and the state.
+ */
+export interface AppAuthorizeResponse {
+  redirect: string;
+}
+/**
+ * AppTokenRequest is the body of POST /api/app/token, sent by the desktop
+ * app to exchange its code.
+ */
+export interface AppTokenRequest {
+  code: string;
+  codeVerifier: string;
+  redirectUri: string;
+}
+/**
+ * AppToken is the desktop app's session: it sends the token as a Bearer
+ * token on /api/ requests, and the user can revoke it in their settings.
+ */
+export interface AppToken {
+  token: string;
+  user: User;
+}
+/**
  * Health is the response of GET /healthz.
  */
 export interface Health {

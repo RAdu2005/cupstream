@@ -78,5 +78,5 @@ func (s *Server) switchSession(w http.ResponseWriter, r *http.Request, userID st
 	if err := s.Sessions.End(r.Context(), w, r); err != nil {
 		slog.WarnContext(r.Context(), "ending previous session failed", "err", err)
 	}
-	return s.Sessions.Start(r.Context(), w, userID, auth.KindWeb, "")
+	return s.Sessions.Start(r.Context(), w, userID)
 }
