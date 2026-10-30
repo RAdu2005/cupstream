@@ -49,6 +49,15 @@ In your room's settings, generate a stream key. In OBS, choose the **WHIP** serv
 
 Every merge into `master` is deployed to https://cupstream.larp.love once CI passes; `/healthz` reports the running commit. [AGENTS.md](AGENTS.md) has the rules for branches, pull requests, deploys and rollbacks.
 
+MediaMTX is installed by hand, as a systemd service next to `cupstream.service`, and only changes when its pinned tag does. Take the binary from the image, so production runs the same build as development and CI:
+
+```sh
+docker compose build mediamtx
+id=$(docker create cupstream-mediamtx:<tag>) && docker cp $id:/usr/local/bin/mediamtx . && docker rm $id
+```
+
+On the server: install it as `/usr/local/bin/mediamtx`, with a system user `mediamtx`, [mediamtx.yml](deploy/mediamtx/mediamtx.yml) as `/etc/mediamtx/mediamtx.yml`, [env.example](deploy/mediamtx/env.example) adapted as `/etc/mediamtx/env` (both `root:mediamtx`, mode 640) and [mediamtx.service](deploy/mediamtx/mediamtx.service) in `/etc/systemd/system/`. Open port 8189 (UDP and TCP) in the firewall, raise the UDP send buffer limit (see [MediaMTX build](#mediamtx-build)), then restart `mediamtx` and `cupstream`: the server reads MediaMTX's features at startup, and `/healthz` should report `"pause":true,"events":true`.
+
 ## Configuration
 
 The server reads `CUPSTREAM_*` environment variables; see [.env.example](.env.example). MediaMTX's HTTP API and WHIP/WHEP listener are bound to `127.0.0.1`: only the CupStream server talks to them, and media flows on port 8189 (UDP, with TCP fallback).

@@ -1,20 +1,46 @@
 [Unit]
 Description=MediaMTX streaming server
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
 User=mediamtx
 Group=mediamtx
+# MTX_* overrides of /etc/mediamtx/mediamtx.yml, GOGC and GOMEMLIMIT; see
+# deploy/mediamtx/env.example.
+EnvironmentFile=-/etc/mediamtx/env
 ExecStart=/usr/local/bin/mediamtx /etc/mediamtx/mediamtx.yml
 Restart=on-failure
 RestartSec=2
 
+# Sandbox. MediaMTX writes nothing (recording is off) and listens on
+# unprivileged ports. It reads the network interfaces over netlink to
+# advertise their addresses in ICE candidates.
+CapabilityBoundingSet=
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=/var/lib/mediamtx
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+SystemCallErrorNumber=EPERM
 
 [Install]
 WantedBy=multi-user.target
