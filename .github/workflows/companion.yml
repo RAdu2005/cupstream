@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-24.04
     # A hung step (a pipeline or driver that never returns) must not hold a
     # runner for hours.
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
       - name: GStreamer and PipeWire development files
@@ -28,13 +28,18 @@ jobs:
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev \
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
             gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-nice \
-            libpipewire-0.3-dev libclang-dev pkg-config
+            libpipewire-0.3-dev libclang-dev pkg-config \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
       - uses: jdx/mise-action@v5
         with:
           working_directory: companion
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: companion
+      # The app embeds its window's UI, so it is built first.
+      - name: App UI
+        working-directory: companion/app
+        run: npm ci && npm run typecheck && npm run build
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
@@ -75,10 +80,20 @@ jobs:
         if: always()
         working-directory: .
         run: docker compose logs
+      - name: Packages
+        working-directory: companion/app
+        run: npx tauri build --bundles deb,rpm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cupstream-app-linux
+          path: |
+            companion/target/release/bundle/deb/*.deb
+            companion/target/release/bundle/rpm/*.rpm
 
   windows:
     runs-on: windows-latest
-    timeout-minutes: 45
+    # Includes a release build of the app for the installer.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
       - name: GStreamer
@@ -99,12 +114,22 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: companion
+      - name: App UI
+        working-directory: companion/app
+        run: npm ci && npm run build
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
       - run: cargo build --bin cupstream-cli
       - name: Encoders on this runner
         timeout-minutes: 5
         run: target/debug/cupstream-cli encoders
+      - name: Installer
+        working-directory: companion/app
+        run: npx tauri build --bundles nsis
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cupstream-app-windows
+          path: companion/target/release/bundle/nsis/*.exe
       # For testing on a Windows machine without a Rust toolchain: it needs
       # the GStreamer runtime installed, with its bin directory on PATH.
       - uses: actions/upload-artifact@v4
