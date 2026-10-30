@@ -62,6 +62,20 @@ export interface Notification {
 export interface FriendsChanged {
   type: 'friendsChanged';
 }
+/**
+ * FriendSuggestion is someone the user may know: a CupStream user with
+ * Discord linked who shares Discord servers with them. GET
+ * /api/friends/suggestions lists them, those sharing the most servers first.
+ */
+export interface FriendSuggestion {
+  user: User;
+  guilds: SharedGuild[];
+}
+export interface SharedGuild {
+  id: string;
+  name: string;
+  iconUrl?: string;
+}
 
 //////////
 // source: types.go

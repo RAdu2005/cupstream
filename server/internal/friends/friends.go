@@ -1,10 +1,15 @@
-// Package friends manages friend requests, friendships and blocks.
+// Package friends manages friend requests, friendships, blocks and
+// suggestions.
 //
 // A friendship is a request that the other person accepts: without
 // acceptance, anyone could add someone and see when they go live. Each pair
 // of users has at most one row in friendships, pending or accepted. Blocking
 // someone ends any friendship or request with them; they can then neither
 // find the user by handle nor send them requests.
+//
+// Suggestions are CupStream users with a linked Discord account who share a
+// Discord server with the user, among the servers both left on for
+// suggestions (very large ones start off, see auth.LargeGuildMembers).
 package friends
 
 import (
@@ -26,6 +31,9 @@ const (
 	MaxOutgoing = 100
 	// MaxIncoming is how many unanswered requests one user may receive.
 	MaxIncoming = 500
+
+	// MaxSuggestions is how many suggestions are listed at once.
+	MaxSuggestions = 50
 
 	// Each user may send requestBurst requests at once, then one per
 	// requestRefill: every request notifies its recipient, so sending and
@@ -274,7 +282,14 @@ func (s *Service) remove(ctx context.Context, userID, otherID, status string, mi
 		default:
 			rel = Incoming
 		}
-		return q.DeleteFriendship(ctx, store.DeleteFriendshipParams{UserA: f.UserA, UserB: f.UserB})
+		if err := q.DeleteFriendship(ctx, store.DeleteFriendshipParams{UserA: f.UserA, UserB: f.UserB}); err != nil {
+			return err
+		}
+		if rel == Incoming {
+			// Declined: do not suggest them again.
+			return q.DismissSuggestion(ctx, store.DismissSuggestionParams{UserID: userID, OtherID: otherID, CreatedAt: s.now().Unix()})
+		}
+		return nil
 	})
 	return rel, err
 }
@@ -353,16 +368,65 @@ func (s *Service) Blocked(ctx context.Context, userID string) ([]store.User, err
 	return s.db.ListBlocked(ctx, userID)
 }
 
+// Guild is a Discord server shared with a suggested person.
+type Guild struct {
+	ID, Name, IconURL string
+}
+
+type Suggestion struct {
+	User   store.User
+	Guilds []Guild // the shared servers, by name
+}
+
+// Suggestions lists people userID may know from their Discord servers, those
+// sharing the most servers first.
+func (s *Service) Suggestions(ctx context.Context, userID string) ([]Suggestion, error) {
+	rows, err := s.db.ListSuggestions(ctx, store.ListSuggestionsParams{UserID: userID, Max: MaxSuggestions})
+	if err != nil || len(rows) == 0 {
+		return []Suggestion{}, err
+	}
+	ids := make([]string, len(rows))
+	for i, row := range rows {
+		ids[i] = row.User.ID
+	}
+	shared, err := s.db.ListSharedGuilds(ctx, store.ListSharedGuildsParams{UserID: userID, OtherIds: ids})
+	if err != nil {
+		return nil, err
+	}
+	guilds := map[string][]Guild{}
+	for _, g := range shared {
+		guilds[g.OtherID] = append(guilds[g.OtherID], Guild{ID: g.GuildID, Name: g.Name, IconURL: g.Icon})
+	}
+	out := make([]Suggestion, len(rows))
+	for i, row := range rows {
+		out[i] = Suggestion{User: row.User, Guilds: guilds[row.User.ID]}
+	}
+	return out, nil
+}
+
+// Dismiss stops suggesting otherID to userID.
+func (s *Service) Dismiss(ctx context.Context, userID, otherID string) error {
+	if otherID == userID {
+		return ErrSelf
+	}
+	if _, err := s.db.GetUser(ctx, otherID); errors.Is(err, sql.ErrNoRows) {
+		return ErrNoUser
+	} else if err != nil {
+		return err
+	}
+	return s.db.DismissSuggestion(ctx, store.DismissSuggestionParams{UserID: userID, OtherID: otherID, CreatedAt: s.now().Unix()})
+}
+
 // FriendIDs lists the IDs of userID's friends.
 func (s *Service) FriendIDs(ctx context.Context, userID string) ([]string, error) {
 	return s.db.ListFriendIDs(ctx, userID)
 }
 
-// Merge carries the friendships, requests and blocks of from (an account
-// being merged away) over to to, inside the merge's transaction. Where both
-// accounts had a relation with the same person, a friendship wins over a
-// request, and requests in both directions become a friendship. Friendships
-// with someone either side blocked are dropped.
+// Merge carries the friendships, requests, blocks and dismissed suggestions
+// of from (an account being merged away) over to to, inside the merge's
+// transaction. Where both accounts had a relation with the same person, a
+// friendship wins over a request, and requests in both directions become a
+// friendship. Friendships with someone either side blocked are dropped.
 func Merge(ctx context.Context, q *store.Queries, from, to string) error {
 	rows, err := q.ListUserFriendships(ctx, from)
 	if err != nil {
@@ -396,6 +460,9 @@ func Merge(ctx context.Context, q *store.Queries, from, to string) error {
 		return err
 	}
 	if err := q.MoveBlocksOf(ctx, store.MoveBlocksOfParams{ToUser: to, FromUser: from}); err != nil {
+		return err
+	}
+	if err := q.MoveDismissals(ctx, store.MoveDismissalsParams{ToUser: to, FromUser: from}); err != nil {
 		return err
 	}
 	return q.DeleteBlockedFriendships(ctx, to)

@@ -23,6 +23,12 @@ type DiscordToken struct {
 	GuildsSyncedAt        int64
 }
 
+type FriendDismissal struct {
+	UserID    string
+	OtherID   string
+	CreatedAt int64
+}
+
 type Friendship struct {
 	UserA       string
 	UserB       string

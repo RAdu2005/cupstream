@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/RAdu2005/cupstream/server/internal/api"
+	"github.com/RAdu2005/cupstream/server/internal/store"
 )
 
 func TestFriends(t *testing.T) {
@@ -94,4 +95,42 @@ func TestFriends(t *testing.T) {
 	anon := e.browser(t)
 	anon.json("GET", "/api/friends", nil, nil, http.StatusUnauthorized)
 	anon.json("POST", "/api/friends/requests", api.SendFriendRequest{UserID: a.ID}, nil, http.StatusUnauthorized)
+}
+
+func TestFriendSuggestions(t *testing.T) {
+	e := newTestEnv(t, envOptions{devLogin: true})
+	alice, bob := e.browser(t), e.browser(t)
+	a := alice.devLogin("alice")
+	b := bob.devLogin("bob")
+	// Both linked Discord and are on the same server.
+	for _, u := range []api.User{a, b} {
+		if err := e.db.CreateIdentity(t.Context(), store.CreateIdentityParams{Provider: "discord", Subject: u.Handle, UserID: u.ID, Username: u.Handle}); err != nil {
+			t.Fatal(err)
+		}
+		if err := e.db.UpsertUserGuild(t.Context(), store.UpsertUserGuildParams{UserID: u.ID, GuildID: "g1", Name: "Cup", Icon: "icon", SuggestionsEnabled: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var list []api.FriendSuggestion
+	alice.json("GET", "/api/friends/suggestions", nil, &list, 200)
+	if len(list) != 1 || list[0].User.ID != b.ID || len(list[0].Guilds) != 1 || list[0].Guilds[0].Name != "Cup" {
+		t.Fatalf("alice's suggestions = %+v", list)
+	}
+	alice.json("DELETE", "/api/friends/suggestions/"+b.ID, nil, nil, http.StatusNoContent)
+	alice.json("GET", "/api/friends/suggestions", nil, &list, 200)
+	if len(list) != 0 {
+		t.Fatalf("after dismissing = %+v", list)
+	}
+	// Bob still sees Alice until he sends a request.
+	bob.json("GET", "/api/friends/suggestions", nil, &list, 200)
+	if len(list) != 1 {
+		t.Fatalf("bob's suggestions = %+v", list)
+	}
+	bob.json("POST", "/api/friends/requests", api.SendFriendRequest{UserID: a.ID}, nil, 200)
+	bob.json("GET", "/api/friends/suggestions", nil, &list, 200)
+	if len(list) != 0 {
+		t.Fatalf("bob's suggestions after asking = %+v", list)
+	}
+	bob.json("DELETE", "/api/friends/suggestions/nobody", nil, nil, http.StatusNotFound)
 }

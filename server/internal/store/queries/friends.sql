@@ -84,3 +84,50 @@ WHERE (user_a = sqlc.arg(user_id) OR user_b = sqlc.arg(user_id))
       WHERE (user_blocks.user_id = friendships.user_a AND user_blocks.blocked_id = friendships.user_b)
          OR (user_blocks.user_id = friendships.user_b AND user_blocks.blocked_id = friendships.user_a)
   );
+
+-- People who share a Discord server with user_id where both have suggestions
+-- on, have Discord linked, and are not already friends, asked, blocked
+-- either way or dismissed. Most shared servers first.
+-- name: ListSuggestions :many
+SELECT sqlc.embed(users), CAST(COUNT(*) AS INTEGER) AS shared
+FROM user_guilds AS mine
+JOIN user_guilds AS theirs ON theirs.guild_id = mine.guild_id AND theirs.user_id <> mine.user_id
+JOIN users ON users.id = theirs.user_id
+WHERE mine.user_id = sqlc.arg(user_id) AND mine.suggestions_enabled = 1 AND theirs.suggestions_enabled = 1
+  AND EXISTS (SELECT 1 FROM identities WHERE identities.user_id = users.id AND identities.provider = 'discord')
+  AND NOT EXISTS (
+      SELECT 1 FROM friendships
+      WHERE (friendships.user_a = sqlc.arg(user_id) AND friendships.user_b = users.id)
+         OR (friendships.user_b = sqlc.arg(user_id) AND friendships.user_a = users.id)
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM user_blocks
+      WHERE (user_blocks.user_id = sqlc.arg(user_id) AND user_blocks.blocked_id = users.id)
+         OR (user_blocks.user_id = users.id AND user_blocks.blocked_id = sqlc.arg(user_id))
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM friend_dismissals
+      WHERE friend_dismissals.user_id = sqlc.arg(user_id) AND friend_dismissals.other_id = users.id
+  )
+GROUP BY users.id
+ORDER BY shared DESC, users.display_name COLLATE NOCASE, users.handle
+LIMIT sqlc.arg(max);
+
+-- The servers, with suggestions on for both, that user_id shares with others.
+-- name: ListSharedGuilds :many
+SELECT theirs.user_id AS other_id, mine.guild_id, mine.name, mine.icon
+FROM user_guilds AS mine
+JOIN user_guilds AS theirs ON theirs.guild_id = mine.guild_id
+WHERE mine.user_id = sqlc.arg(user_id) AND theirs.user_id IN (sqlc.slice(other_ids))
+  AND mine.suggestions_enabled = 1 AND theirs.suggestions_enabled = 1
+ORDER BY mine.name COLLATE NOCASE;
+
+-- name: DismissSuggestion :exec
+INSERT INTO friend_dismissals (user_id, other_id, created_at) VALUES (?, ?, ?)
+ON CONFLICT DO NOTHING;
+
+-- Merging accounts: the absorbed user's dismissals.
+-- name: MoveDismissals :exec
+INSERT OR IGNORE INTO friend_dismissals (user_id, other_id, created_at)
+SELECT sqlc.arg(to_user), other_id, created_at FROM friend_dismissals
+WHERE friend_dismissals.user_id = sqlc.arg(from_user) AND other_id <> sqlc.arg(to_user);
