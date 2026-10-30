@@ -71,6 +71,13 @@ type Subject struct {
 	CanVideo          bool // Discord's Video (Go Live) permission in the channel
 	CanMoveMembers    bool
 	CanManageMessages bool
+	// InVoiceToStream is InVoiceChannel with the streamers' longer grace
+	// period: a streamer who left voice keeps streaming for a few seconds.
+	InVoiceToStream bool
+	// VoiceStale means the bot's view of the server is out of date (it lost
+	// its connection to Discord), so people it does not see in voice may
+	// well be there.
+	VoiceStale bool
 }
 
 // Reason explains a refusal, so the website can tell the user what to do.
@@ -84,6 +91,8 @@ const (
 	DiscordRequired  Reason = "discord_required"
 	JoinVoiceChannel Reason = "join_voice_channel"
 	NoVideoPerm      Reason = "no_video_permission"
+	// The bot is reconnecting to Discord and cannot tell yet; try again.
+	DiscordReconnecting Reason = "discord_reconnecting"
 )
 
 // Check reports whether s may perform action in room, and why not.
@@ -149,7 +158,10 @@ func checkDiscord(room Room, s Subject, action Action) Reason {
 		return SignInRequired
 	case !s.DiscordLinked:
 		return DiscordRequired
-	case !s.InVoiceChannel:
+	case !s.InVoiceChannel && !(action == Stream && s.InVoiceToStream):
+		if s.VoiceStale {
+			return DiscordReconnecting
+		}
 		return JoinVoiceChannel
 	}
 	switch action {

@@ -16,6 +16,14 @@ type ChatMessage struct {
 	CreatedAt int64
 }
 
+type DiscordGuild struct {
+	GuildID         string
+	StreamPolicy    string
+	Announce        bool
+	TrackedChannels sql.NullString
+	CreatedAt       int64
+}
+
 type DiscordToken struct {
 	UserID                string
 	EncryptedRefreshToken []byte

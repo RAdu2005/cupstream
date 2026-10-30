@@ -17,6 +17,7 @@ sql:
           - { column: invites.can_stream, go_type: bool }
           - { column: invites.until_stream_end, go_type: bool }
           - { column: user_guilds.suggestions_enabled, go_type: bool }
+          - { column: discord_guilds.announce, go_type: bool }
 overrides:
   go:
     rename:

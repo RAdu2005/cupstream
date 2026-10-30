@@ -59,6 +59,10 @@ type Config struct {
 	Google  OAuthClient
 	Discord OAuthClient
 
+	// DiscordBotToken runs the Discord bot, which enables Discord rooms. It
+	// belongs to the same Discord application as the Discord sign-in.
+	DiscordBotToken string
+
 	LogLevel  slog.Level
 	LogFormat string // "json" or "text"
 }
@@ -93,19 +97,20 @@ func load(getenv func(string) string) (*Config, error) {
 	}
 
 	c := &Config{
-		Addr:           get("ADDR", ":8080"),
-		PublicURL:      parseURL("PUBLIC_URL", "http://localhost:8080"),
-		ClientIPHeader: get("CLIENT_IP_HEADER", ""),
-		TLSCert:        get("TLS_CERT", ""),
-		TLSKey:         get("TLS_KEY", ""),
-		DBPath:         get("DB", "data/cupstream.db"),
-		MediaMTXAPI:    parseURL("MEDIAMTX_API", "http://127.0.0.1:9997"),
-		MediaMTXWebRTC: parseURL("MEDIAMTX_WEBRTC", "http://127.0.0.1:8889"),
-		DevLogin:       parseBool("DEV_LOGIN", false),
-		NoRateLimits:   !parseBool("RATE_LIMITS", true),
-		LogFormat:      get("LOG_FORMAT", "json"),
-		Google:         OAuthClient{ID: get("GOOGLE_CLIENT_ID", ""), Secret: get("GOOGLE_CLIENT_SECRET", "")},
-		Discord:        OAuthClient{ID: get("DISCORD_CLIENT_ID", ""), Secret: get("DISCORD_CLIENT_SECRET", "")},
+		Addr:            get("ADDR", ":8080"),
+		PublicURL:       parseURL("PUBLIC_URL", "http://localhost:8080"),
+		ClientIPHeader:  get("CLIENT_IP_HEADER", ""),
+		TLSCert:         get("TLS_CERT", ""),
+		TLSKey:          get("TLS_KEY", ""),
+		DBPath:          get("DB", "data/cupstream.db"),
+		MediaMTXAPI:     parseURL("MEDIAMTX_API", "http://127.0.0.1:9997"),
+		MediaMTXWebRTC:  parseURL("MEDIAMTX_WEBRTC", "http://127.0.0.1:8889"),
+		DevLogin:        parseBool("DEV_LOGIN", false),
+		NoRateLimits:    !parseBool("RATE_LIMITS", true),
+		LogFormat:       get("LOG_FORMAT", "json"),
+		Google:          OAuthClient{ID: get("GOOGLE_CLIENT_ID", ""), Secret: get("GOOGLE_CLIENT_SECRET", "")},
+		Discord:         OAuthClient{ID: get("DISCORD_CLIENT_ID", ""), Secret: get("DISCORD_CLIENT_SECRET", "")},
+		DiscordBotToken: get("DISCORD_BOT_TOKEN", ""),
 	}
 
 	for name, oc := range map[string]OAuthClient{"GOOGLE": c.Google, "DISCORD": c.Discord} {
@@ -133,6 +138,9 @@ func load(getenv func(string) string) (*Config, error) {
 	}
 	if c.LogFormat != "json" && c.LogFormat != "text" {
 		errs = append(errs, fmt.Errorf("CUPSTREAM_LOG_FORMAT: %q must be json or text", c.LogFormat))
+	}
+	if c.DiscordBotToken != "" && !c.Discord.Enabled() {
+		errs = append(errs, errors.New("CUPSTREAM_DISCORD_BOT_TOKEN needs Discord sign-in (CUPSTREAM_DISCORD_CLIENT_ID and _SECRET): Discord rooms are for people signed in with Discord"))
 	}
 	if (c.TLSCert == "") != (c.TLSKey == "") {
 		errs = append(errs, errors.New("CUPSTREAM_TLS_CERT and CUPSTREAM_TLS_KEY must be set together"))

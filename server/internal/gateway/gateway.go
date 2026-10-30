@@ -85,6 +85,8 @@ const (
 	EndModerator     = "ended_by_moderator"
 	EndAccountMerged = "account_merged"
 	EndAccessRevoked = "access_revoked"
+	// Discord rooms: the streamer left the voice channel.
+	EndLeftVoice = "left_voice"
 )
 
 type liveStream struct {
@@ -457,6 +459,7 @@ func (g *Gateway) expire(ctx context.Context) {
 	now := g.now()
 	var ends []ending
 	var kicks []string
+	var held []heldSession
 
 	g.mu.Lock()
 	for id, s := range g.streams {
@@ -472,6 +475,10 @@ func (g *Gateway) expire(ctx context.Context) {
 		case !sess.confirmed && now.Sub(sess.created) > sessionHandshakeTimeout:
 			delete(g.sessions, id)
 		case sess.held && now.Sub(sess.heldAt) > holdTimeout:
+			if s := g.streams[sess.streamID]; s != nil {
+				held = append(held, heldSession{id, s.rec.RoomID})
+				continue
+			}
 			delete(g.sessions, id)
 			kicks = append(kicks, id)
 		}
@@ -483,6 +490,7 @@ func (g *Gateway) expire(ctx context.Context) {
 	}
 	g.mu.Unlock()
 
+	kicks = append(kicks, g.heldTooLong(ctx, held)...)
 	for _, id := range kicks {
 		if err := g.mtx.Kick(ctx, id); err != nil {
 			slog.Warn("kick failed", "id", id, "err", err)
@@ -491,6 +499,32 @@ func (g *Gateway) expire(ctx context.Context) {
 	for _, e := range ends {
 		g.finish(ctx, e)
 	}
+}
+
+type heldSession struct{ mtxID, roomID string }
+
+// heldTooLong forgets the sessions of viewers held longer than holdTimeout
+// and returns them to disconnect, except in Discord rooms whose voice state
+// is stale: whoever left voice may be back, so they wait for the bot.
+func (g *Gateway) heldTooLong(ctx context.Context, held []heldSession) []string {
+	stale := map[string]bool{}
+	for _, h := range held {
+		if _, seen := stale[h.roomID]; seen {
+			continue
+		}
+		room, err := g.db.GetRoom(ctx, h.roomID)
+		stale[h.roomID] = err == nil && g.rooms.Stale(room)
+	}
+	var kicks []string
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, h := range held {
+		if sess, ok := g.sessions[h.mtxID]; ok && !stale[h.roomID] {
+			delete(g.sessions, h.mtxID)
+			kicks = append(kicks, sess.mtxID)
+		}
+	}
+	return kicks
 }
 
 func (g *Gateway) viewerCountsLocked() map[string]int {
@@ -582,6 +616,11 @@ func (g *Gateway) finish(ctx context.Context, e ending) {
 // get their media back if they regain access in the meantime; streams whose
 // streamer may no longer stream there are ended.
 func (g *Gateway) Reevaluate(ctx context.Context, room store.Room) {
+	if g.rooms.Stale(room) {
+		// Discord's view is out of date: nobody is paused or ended until the
+		// bot sees again who is in voice, and it checks the room then.
+		return
+	}
 	type viewer struct {
 		mtxID, userID string
 		held          bool
@@ -601,17 +640,22 @@ func (g *Gateway) Reevaluate(ctx context.Context, room store.Room) {
 	}
 	g.mu.Unlock()
 
-	allowed := func(userID string, action access.Action) bool {
+	check := func(userID string, action access.Action) access.Reason {
 		r, err := g.rooms.Check(ctx, room, userID, action)
 		if err != nil {
 			slog.Error("access check failed", "err", err)
-			return true // keep things as they are rather than kick on errors
+			return access.OK // keep things as they are rather than kick on errors
 		}
-		return r == access.OK
+		return r
 	}
+	allowed := func(userID string, action access.Action) bool { return check(userID, action) == access.OK }
 
 	for streamID, userID := range streamers {
-		if !allowed(userID, access.Stream) {
+		switch check(userID, access.Stream) {
+		case access.OK, access.DiscordReconnecting:
+		case access.JoinVoiceChannel:
+			g.EndStream(ctx, streamID, EndLeftVoice)
+		default:
 			g.EndStream(ctx, streamID, EndAccessRevoked)
 		}
 	}

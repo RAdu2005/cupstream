@@ -8,7 +8,7 @@ The design and the implementation plan are in [output/md/cupstream-project-overv
 
 | Path | What |
 |---|---|
-| `server/` | Go server: OAuth sign-in and accounts, rooms and access checks (`internal/access`), friends (`internal/friends`), the WHIP/WHEP media gateway (`internal/gateway`), the realtime WebSocket with presence and chat (`internal/realtime`), and later the Discord bot. SQLite with goose migrations and sqlc queries. |
+| `server/` | Go server: OAuth sign-in and accounts, rooms and access checks (`internal/access`), friends (`internal/friends`), the WHIP/WHEP media gateway (`internal/gateway`), the realtime WebSocket with presence and chat (`internal/realtime`), and the Discord bot (`internal/discord`). SQLite with goose migrations and sqlc queries. |
 | `web/` | Website: React, TypeScript, Vite, Tailwind CSS, TanStack Query, React Router. |
 | `deploy/mediamtx/` | MediaMTX image, built from [our fork](https://github.com/RAdu2005/mediamtx) at a pinned tag, and its configuration. |
 | `deploy/cupstream/` | systemd and OpenRC service files, and `cupstream-deploy`, which CI runs on the production server. |
@@ -44,6 +44,12 @@ The development login needs no setup. To try the real providers locally, create 
 ### Desktop app sign-in
 
 The desktop app signs in like a native OAuth client (RFC 8252, with PKCE). It listens on `http://127.0.0.1:<port>/`, opens `/app/authorize?redirect_uri=…&state=…&code_challenge=…&code_challenge_method=S256&device_name=…` in the system browser, and the signed-in user approves it there. The browser is sent back to the app with a one-time code, valid for a minute, which the app exchanges at `POST /api/app/token` for an app session. The app keeps that token in the system keychain and sends it as `Authorization: Bearer` on `/api/` requests, including the realtime WebSocket; `POST /api/auth/logout` with it signs the app out, and the user can revoke it under Settings, Sessions.
+
+### Discord bot
+
+The bot runs inside the server when `CUPSTREAM_DISCORD_BOT_TOKEN` is set, and enables Discord rooms: one per voice channel, created when first used, which only people in that channel who signed in with Discord can enter. Use the same Discord application as Discord sign-in: under *Bot*, reset and copy the token; it needs no privileged intents. Invite it to a test server with `https://discord.com/oauth2/authorize?client_id=<client ID>&scope=bot+applications.commands&permissions=19456` (View Channels, Send Messages, Embed Links).
+
+The bot keeps what it knows in memory: each server's roles and channels, and the voice channels of people who use CupStream (nobody else's). Viewers who leave the channel are paused after 1.5 seconds and disconnected after 2 minutes; streamers keep streaming for 12 seconds. While the bot is disconnected from Discord, these grace periods stand still and nobody is paused, disconnected or ended, until it sees the servers again.
 
 ### Realtime
 

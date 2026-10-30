@@ -105,6 +105,9 @@ func (g *Gateway) SetViewerPaused(ctx context.Context, streamID, secret string, 
 		if err != nil {
 			return err
 		}
+		if reason == access.DiscordReconnecting {
+			return &accessError{reason} // no pauses while Discord's view is stale
+		}
 		if reason != access.OK {
 			g.hold(ctx, sess.mtxID)
 			return &accessError{reason}
