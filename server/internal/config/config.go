@@ -29,6 +29,10 @@ type Config struct {
 	// PublicURL is the origin users open in the browser. It decides whether
 	// cookies are Secure and, later, the OAuth redirect URLs.
 	PublicURL *url.URL
+	// ClientIPHeader names a request header that carries the client's
+	// address, such as CF-Connecting-IP behind a Cloudflare Tunnel. It is
+	// trusted only on connections from this machine (the tunnel connector).
+	ClientIPHeader string
 	// TLSCert and TLSKey, when both set, make the server speak HTTPS
 	// (a Cloudflare Origin CA certificate in production).
 	TLSCert, TLSKey string
@@ -87,6 +91,7 @@ func load(getenv func(string) string) (*Config, error) {
 	c := &Config{
 		Addr:           get("ADDR", ":8080"),
 		PublicURL:      parseURL("PUBLIC_URL", "http://localhost:8080"),
+		ClientIPHeader: get("CLIENT_IP_HEADER", ""),
 		TLSCert:        get("TLS_CERT", ""),
 		TLSKey:         get("TLS_KEY", ""),
 		DBPath:         get("DB", "data/cupstream.db"),

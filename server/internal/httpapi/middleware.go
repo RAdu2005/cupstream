@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"log/slog"
+	"net"
 	"net/http"
 	"runtime/debug"
 	"time"
@@ -62,6 +63,45 @@ func recoverPanics(next http.Handler) http.Handler {
 				writeError(w, http.StatusInternalServerError, "internal error")
 			}
 		}()
+		next.ServeHTTP(w, r)
+	})
+}
+
+// clientIPFrom replaces the request's remote address with the one in header
+// when the request comes from this machine, i.e. from a reverse proxy or
+// tunnel connector running next to the server. Everything downstream (the
+// development login's loopback check, MediaMTX's X-Forwarded-For) then sees
+// the real client.
+func clientIPFrom(header string, next http.Handler) http.Handler {
+	if header == "" {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isLoopback(r) {
+			if ip := net.ParseIP(r.Header.Get(header)); ip != nil {
+				r2 := r.Clone(r.Context())
+				r2.RemoteAddr = net.JoinHostPort(ip.String(), "0")
+				r = r2
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// redirectToHTTPS sends visitors who reached the proxy in front of the server
+// over plain HTTP to the HTTPS address. The proxy reports the visitor's
+// scheme in X-Forwarded-Proto, trusted only on connections from this machine.
+func redirectToHTTPS(enabled bool, next http.Handler) http.Handler {
+	if !enabled {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isLoopback(r) && r.Header.Get("X-Forwarded-Proto") == "http" {
+			u := *r.URL
+			u.Scheme, u.Host = "https", r.Host
+			http.Redirect(w, r, u.String(), http.StatusMovedPermanently)
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
 }
