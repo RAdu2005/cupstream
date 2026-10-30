@@ -27,7 +27,10 @@ type DestinationError struct {
 
 func (e *DestinationError) Error() string { return e.Message }
 
-const CodeDiscordUnavailable = "discord_unavailable"
+const (
+	CodeDiscordUnavailable = "discord_unavailable"
+	CodeRoomFull           = "room_full"
+)
 
 type StartRequest struct {
 	User   store.User
@@ -66,9 +69,14 @@ func (g *Gateway) Start(ctx context.Context, req StartRequest) (Started, error) 
 		return Started{}, &DestinationError{Code: string(reason), Message: "you may not stream in this room"}
 	}
 
-	if cur := g.activeStreamOf(req.User.ID); cur != nil {
+	cur := g.activeStreamOf(req.User.ID)
+	isReconnect := cur != nil && req.Source == SourceOBS && Source(cur.Source) == SourceOBS && cur.RoomID == room.ID
+	if !isReconnect && g.roomStreamsExcept(room.ID, cur) >= MaxRoomStreams {
+		return Started{}, &DestinationError{Code: CodeRoomFull, Message: fmt.Sprintf("this room already has %d streams, the most it can have", MaxRoomStreams)}
+	}
+	if cur != nil {
 		switch {
-		case req.Source == SourceOBS && Source(cur.Source) == SourceOBS && cur.RoomID == room.ID:
+		case isReconnect:
 			// OBS reconnecting its own dropped stream is not a second stream.
 			return Started{Stream: *cur, Room: room, Reconnect: true}, nil
 		case !req.Replace || req.Source == SourceOBS:
@@ -100,6 +108,20 @@ func (g *Gateway) Start(ctx context.Context, req StartRequest) (Started, error) 
 	g.changed()
 	g.mu.Unlock()
 	return Started{Stream: rec, Room: room, Token: token}, nil
+}
+
+// roomStreamsExcept counts the active streams of a room, apart from skip
+// (a stream that is about to be replaced).
+func (g *Gateway) roomStreamsExcept(roomID string, skip *store.Stream) int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	n := 0
+	for id, s := range g.streams {
+		if s.rec.RoomID == roomID && (skip == nil || id != skip.ID) {
+			n++
+		}
+	}
+	return n
 }
 
 func (g *Gateway) destination(ctx context.Context, req StartRequest) (store.Room, error) {

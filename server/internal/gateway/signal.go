@@ -198,6 +198,10 @@ func (g *Gateway) forwardOffer(w http.ResponseWriter, r *http.Request, rec store
 			// Kept in MediaMTX's session list, so it survives a restart.
 			query.Set("t", tab)
 		}
+		if !p && g.tooManyStreams(userID, tab, "") {
+			writeErr(w, http.StatusConflict, CodeTooManyStreams, errTooManyStreams.Error())
+			return false
+		}
 		if p {
 			if !g.Features().Pause {
 				writeErr(w, http.StatusNotImplemented, "pause_unsupported", errPauseUnsupported.Error())
@@ -435,7 +439,7 @@ func (g *Gateway) WriteStartError(w http.ResponseWriter, r *http.Request, err er
 		writeErr(w, http.StatusConflict, "already_live", live.Error())
 	case errors.As(err, &dest):
 		status := http.StatusForbidden
-		if dest.Code == CodeDiscordUnavailable {
+		if dest.Code == CodeDiscordUnavailable || dest.Code == CodeRoomFull {
 			status = http.StatusConflict
 		}
 		writeErr(w, status, dest.Code, dest.Message)

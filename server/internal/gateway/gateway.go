@@ -15,6 +15,7 @@ import (
 	"database/sql"
 	"encoding/base32"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/url"
 	"slices"
@@ -47,6 +48,16 @@ const (
 	holdTimeout = 2 * time.Minute
 	// Session events that arrive before the WHIP/WHEP answer are kept this long.
 	earlyEventTTL = time.Minute
+)
+
+// Limits (overview, 7.1).
+const (
+	// MaxRoomStreams is how many streams may be active in one room at once.
+	MaxRoomStreams = 8
+	// MaxWatching is how many streams one viewer may receive at once: a
+	// signed-in user across their tabs, an anonymous visitor per tab. Paused
+	// sessions (pre-warmed streams, paused tiles) do not count.
+	MaxWatching = 4
 )
 
 type Source string
@@ -686,6 +697,33 @@ func (g *Gateway) activeStreamOf(userID string) *store.Stream {
 }
 
 var errStreamGone = errors.New("this stream has ended")
+
+// errTooManyStreams refuses a viewer who already receives MaxWatching streams.
+var errTooManyStreams = fmt.Errorf("you can watch up to %d streams at once; pause one first", MaxWatching)
+
+// CodeTooManyStreams is the error code for errTooManyStreams.
+const CodeTooManyStreams = "too_many_streams"
+
+func (g *Gateway) tooManyStreams(userID, tab, except string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.watchingLocked(userID, tab, except) >= MaxWatching
+}
+
+// watchingLocked counts the streams a viewer receives, apart from the
+// session except.
+func (g *Gateway) watchingLocked(userID, tab, except string) int {
+	n := 0
+	for id, s := range g.sessions {
+		if id == except || !s.watching() {
+			continue
+		}
+		if userID != "" && s.userID == userID || userID == "" && tab != "" && s.userID == "" && s.tab == tab {
+			n++
+		}
+	}
+	return n
+}
 
 func slicesSortByStart(s []LiveStream) {
 	slices.SortFunc(s, func(a, b LiveStream) int { return cmp.Compare(a.Stream.StartedAt, b.Stream.StartedAt) })
