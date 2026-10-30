@@ -14,6 +14,7 @@ import (
 	"github.com/RAdu2005/cupstream/server/internal/api"
 	"github.com/RAdu2005/cupstream/server/internal/auth"
 	"github.com/RAdu2005/cupstream/server/internal/config"
+	"github.com/RAdu2005/cupstream/server/internal/friends"
 	"github.com/RAdu2005/cupstream/server/internal/gateway"
 	"github.com/RAdu2005/cupstream/server/internal/mediamtx"
 	"github.com/RAdu2005/cupstream/server/internal/oauth"
@@ -38,6 +39,7 @@ type Deps struct {
 	Rooms     *rooms.Service
 	Gateway   *gateway.Gateway
 	Realtime  *realtime.Hub
+	Friends   *friends.Service
 	MediaMTX  *mediamtx.Client
 	Web       http.Handler
 }
@@ -86,6 +88,17 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("DELETE /api/rooms/{slug}/allowed/{handle}", requireUser(s.removeAllowed))
 	mux.Handle("POST /api/streams", requireUser(s.startStream))
 	mux.Handle("DELETE /api/streams/{id}", requireUser(s.endStream))
+
+	// Friends.
+	mux.Handle("GET /api/friends", requireUser(s.listFriends))
+	mux.Handle("GET /api/friends/lookup", requireUser(s.lookupUser))
+	mux.Handle("POST /api/friends/requests", requireUser(s.sendFriendRequest))
+	mux.Handle("POST /api/friends/requests/{id}/accept", requireUser(s.acceptFriendRequest))
+	mux.Handle("DELETE /api/friends/requests/{id}", requireUser(s.removeFriendRequest))
+	mux.Handle("DELETE /api/friends/{id}", requireUser(s.unfriend))
+	mux.Handle("GET /api/friends/blocked", requireUser(s.listBlocked))
+	mux.Handle("PUT /api/friends/blocked/{id}", requireUser(s.block))
+	mux.Handle("DELETE /api/friends/blocked/{id}", requireUser(s.unblock))
 
 	// Media signaling.
 	mux.HandleFunc("POST /whip", s.Gateway.HandleOBSPublish)

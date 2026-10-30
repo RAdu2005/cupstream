@@ -116,6 +116,11 @@ func TestLinkOwnedByOtherAndMerge(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// So does its friendship with mara.
+	if err := db.UpsertFriendship(ctx, friendship(other.ID, third.ID)); err != nil {
+		t.Fatal(err)
+	}
+
 	var owned *OwnedByOtherError
 	if err := acc.Link(ctx, ana.ID, discord("d1", "ana_discord")); !errors.As(err, &owned) || owned.OtherUserID != other.ID {
 		t.Fatalf("Link = %v, want OwnedByOtherError", err)
@@ -134,6 +139,16 @@ func TestLinkOwnedByOtherAndMerge(t *testing.T) {
 	if a, err := db.GetAllowed(ctx, store.GetAllowedParams{RoomID: maraRoom.ID, UserID: ana.ID}); err != nil || !a.CanStream {
 		t.Fatalf("allowed-list entry not carried over: %+v %v", a, err)
 	}
+	if ids, err := db.ListFriendIDs(ctx, ana.ID); err != nil || len(ids) != 1 || ids[0] != third.ID {
+		t.Fatalf("friendship not carried over: %v %v", ids, err)
+	}
+}
+
+func friendship(x, y string) store.UpsertFriendshipParams {
+	if y < x {
+		x, y = y, x
+	}
+	return store.UpsertFriendshipParams{UserA: x, UserB: y, Status: "accepted", RequestedBy: x}
 }
 
 func TestMergeDropsDuplicateProviders(t *testing.T) {

@@ -4,6 +4,66 @@ export type AuthProvider = 'dev' | 'google' | 'discord';
 export type Visibility = 'everyone' | 'signed_in' | 'invite_only';
 
 //////////
+// source: friends.go
+
+/**
+ * Friend is someone who accepted a friend request, or whose request the
+ * user accepted. Since is Unix seconds.
+ */
+export interface Friend {
+  user: User;
+  since: number /* int64 */;
+}
+/**
+ * FriendRequest is a pending request, sent or received. CreatedAt is Unix
+ * seconds.
+ */
+export interface FriendRequest {
+  user: User;
+  createdAt: number /* int64 */;
+}
+/**
+ * Friends is the response of GET /api/friends.
+ */
+export interface Friends {
+  friends: Friend[];
+  incoming: FriendRequest[]; // requests to the user
+  outgoing: FriendRequest[]; // requests the user sent
+}
+/**
+ * UserRelation is someone and how the user stands with them: friends, a
+ * request either way ("outgoing" was sent by the user), blocked by the user,
+ * or none. It answers GET /api/friends/lookup?handle= and the friend actions.
+ */
+export interface UserRelation {
+  user: User;
+  relation: 'none' | 'friends' | 'outgoing' | 'incoming' | 'blocked';
+}
+/**
+ * SendFriendRequest is the body of POST /api/friends/requests. If the other
+ * person already asked, it accepts their request instead.
+ */
+export interface SendFriendRequest {
+  userId: string;
+}
+/**
+ * Notification is something to tell the user about at once, wherever they
+ * are on the site: User sent them a friend request or accepted theirs.
+ */
+export interface Notification {
+  type: 'notification';
+  kind: 'friendRequest' | 'friendAccepted';
+  user: User;
+}
+/**
+ * FriendsChanged means the user's friends or requests changed; the client
+ * fetches them again.
+ */
+export interface FriendsChanged {
+  type: 'friendsChanged';
+}
+
+//////////
 // source: types.go
 /*
 Package api holds the JSON types of the HTTP API. TypeScript types for the

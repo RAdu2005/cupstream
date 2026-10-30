@@ -14,6 +14,7 @@ import (
 
 	"github.com/RAdu2005/cupstream/server/internal/auth"
 	"github.com/RAdu2005/cupstream/server/internal/config"
+	"github.com/RAdu2005/cupstream/server/internal/friends"
 	"github.com/RAdu2005/cupstream/server/internal/gateway"
 	"github.com/RAdu2005/cupstream/server/internal/httpapi"
 	"github.com/RAdu2005/cupstream/server/internal/mediamtx"
@@ -116,6 +117,7 @@ func run() error {
 			Rooms:     roomService,
 			Gateway:   gw,
 			Realtime:  hub,
+			Friends:   friends.New(db),
 			MediaMTX:  media,
 			Web:       webui.Handler(),
 		}).Handler(),

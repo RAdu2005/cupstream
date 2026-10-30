@@ -16,6 +16,7 @@ import (
 	"github.com/RAdu2005/cupstream/server/internal/api"
 	"github.com/RAdu2005/cupstream/server/internal/auth"
 	"github.com/RAdu2005/cupstream/server/internal/config"
+	"github.com/RAdu2005/cupstream/server/internal/friends"
 	"github.com/RAdu2005/cupstream/server/internal/gateway"
 	"github.com/RAdu2005/cupstream/server/internal/mediamtx"
 	"github.com/RAdu2005/cupstream/server/internal/mediamtx/mtxtest"
@@ -66,6 +67,7 @@ func newTestEnv(t *testing.T, o envOptions) *testEnv {
 	deps := Deps{
 		Config: cfg, Version: "test", DB: db, Sealer: sealer, Sessions: auth.NewSessions(db, false),
 		AppCodes: auth.NewAppCodes(), Rooms: rs, MediaMTX: media, Providers: map[string]oauth.Provider{},
+		Friends: friends.New(db),
 		Web: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "website") }),
 	}
 	if o.oauth {

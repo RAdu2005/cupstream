@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/RAdu2005/cupstream/server/internal/friends"
 	"github.com/RAdu2005/cupstream/server/internal/oauth"
 	"github.com/RAdu2005/cupstream/server/internal/store"
 )
@@ -220,10 +221,11 @@ func (a *Accounts) Unlink(ctx context.Context, userID, provider string) error {
 	})
 }
 
-// Merge moves otherID's identities and room memberships into userID and
-// deletes otherID with everything it owns (its link room, stream keys and
-// stream history). Identities of providers userID already has are dropped.
-// The caller ends otherID's live streams first.
+// Merge moves otherID's identities, room memberships, friends, friend
+// requests and blocks into userID and deletes otherID with everything it
+// owns (its link room, stream keys and stream history). Identities of
+// providers userID already has are dropped. The caller ends otherID's live
+// streams first.
 func (a *Accounts) Merge(ctx context.Context, userID, otherID string) error {
 	if userID == otherID {
 		return nil
@@ -255,6 +257,9 @@ func (a *Accounts) Merge(ctx context.Context, userID, otherID string) error {
 			}
 		}
 		if err := q.MoveAllowed(ctx, store.MoveAllowedParams{ToUser: userID, FromUser: otherID}); err != nil {
+			return err
+		}
+		if err := friends.Merge(ctx, q, otherID, userID); err != nil {
 			return err
 		}
 		return q.DeleteUser(ctx, otherID)
