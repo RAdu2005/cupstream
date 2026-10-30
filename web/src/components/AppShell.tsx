@@ -1,7 +1,9 @@
-import { CupSoda, LogOut, Settings } from 'lucide-react';
+import { CupSoda, LogOut, Settings, Users } from 'lucide-react';
 import { Link, Outlet, useNavigate } from 'react-router';
 import { useLogout, useMe } from '@/api/auth';
+import { useFriends } from '@/api/friends';
 import { GoLiveButton } from './GoLiveButton';
+import { Notifications } from './Notifications';
 import { Button } from './ui';
 
 export function AppShell() {
@@ -50,6 +52,8 @@ function UserMenu() {
         <span className="font-semibold">{user.displayName}</span>
         <span className="hidden text-muted sm:inline">@{user.handle}</span>
       </span>
+      <FriendsLink />
+      <Notifications userId={user.id} />
       <Link to="/settings" aria-label="Settings" title="Settings" className="rounded-md p-2 text-muted hover:bg-raised hover:text-fg">
         <Settings className="size-4" aria-hidden />
       </Link>
@@ -64,5 +68,22 @@ function UserMenu() {
         <LogOut className="size-4" aria-hidden />
       </Button>
     </div>
+  );
+}
+
+/** The friends page, with the number of requests waiting for an answer. */
+function FriendsLink() {
+  const friends = useFriends();
+  const waiting = friends.data?.incoming.length ?? 0;
+  const label = waiting > 0 ? `Friends, ${waiting} new ${waiting === 1 ? 'request' : 'requests'}` : 'Friends';
+  return (
+    <Link to="/friends" aria-label={label} title={label} className="relative rounded-md p-2 text-muted hover:bg-raised hover:text-fg">
+      <Users className="size-4" aria-hidden />
+      {waiting > 0 && (
+        <span className="absolute -top-0.5 -right-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent-strong px-1 text-[10px] font-bold text-white">
+          {waiting > 9 ? '9+' : waiting}
+        </span>
+      )}
+    </Link>
   );
 }

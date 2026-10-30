@@ -89,3 +89,30 @@ test('reconnects as the new user after signing in or out', () => {
   expect(signedOut).toHaveBeenCalledOnce();
   rt.reset();
 });
+
+test('app-wide listeners keep the socket open and get messages without a room', () => {
+  vi.useFakeTimers();
+  const rt = new RealtimeClient();
+  const app: ServerMessage[] = [];
+  const room: ServerMessage[] = [];
+  const stop = rt.listen((m) => app.push(m));
+  expect(FakeWebSocket.instances).toHaveLength(1);
+  FakeWebSocket.last.open();
+  expect(FakeWebSocket.last.sent).toEqual([]);
+
+  rt.subscribe('abc', (m) => room.push(m));
+  FakeWebSocket.last.receive({ type: 'friendsChanged' });
+  FakeWebSocket.last.receive({ type: 'roomChanged', room: 'abc' });
+  expect(app).toEqual([{ type: 'friendsChanged' }]);
+  expect(room).toEqual([{ type: 'friendsChanged' }, { type: 'roomChanged', room: 'abc' }]);
+
+  // With no rooms, the socket reconnects for the listener alone.
+  rt.reset();
+  rt.listen((m) => app.push(m));
+  FakeWebSocket.last.open();
+  FakeWebSocket.last.drop();
+  vi.advanceTimersByTime(1500);
+  expect(FakeWebSocket.instances).toHaveLength(3);
+  stop();
+  rt.reset();
+});
