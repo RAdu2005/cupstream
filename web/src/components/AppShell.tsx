@@ -16,6 +16,14 @@ export function AppShell() {
       <main className="flex flex-1 flex-col">
         <Outlet />
       </main>
+      <footer className="flex shrink-0 justify-center gap-4 border-t border-line px-4 py-3 text-xs text-muted">
+        <Link to="/privacy" className="hover:text-fg">
+          Privacy
+        </Link>
+        <Link to="/terms" className="hover:text-fg">
+          Terms
+        </Link>
+      </footer>
     </div>
   );
 }

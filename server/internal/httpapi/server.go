@@ -96,7 +96,13 @@ func (s *Server) Handler() http.Handler {
 	// Rejects cross-origin state-changing requests from browsers
 	// (Sec-Fetch-Site / Origin vs Host); OBS sends neither header.
 	csrf := http.NewCrossOriginProtection()
-	return recoverPanics(logRequests(csrf.Handler(s.Sessions.Middleware(mux))))
+	h := csrf.Handler(s.Sessions.Middleware(mux))
+	h = logRequests(h)
+	// Behind a tunnel or reverse proxy (CUPSTREAM_CLIENT_IP_HEADER): use the
+	// visitor's address, and send plain-HTTP visitors to HTTPS.
+	h = clientIPFrom(s.Config.ClientIPHeader, h)
+	h = redirectToHTTPS(s.Config.ClientIPHeader != "" && s.Config.SecureCookies(), h)
+	return recoverPanics(h)
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {

@@ -73,13 +73,17 @@ func withQuery(path string, kv ...string) string {
 	return u.String()
 }
 
-func (s *Server) setCookie(w http.ResponseWriter, name, path, value string, ttl time.Duration) {
+func (s *Server) cookieName(base string) string {
+	return auth.CookieName(base, s.Config.SecureCookies())
+}
+
+func (s *Server) setCookie(w http.ResponseWriter, name, value string, ttl time.Duration) {
 	maxAge := int(ttl.Seconds())
 	if value == "" {
 		maxAge = -1
 	}
 	http.SetCookie(w, &http.Cookie{
-		Name: name, Value: value, Path: path, MaxAge: maxAge,
+		Name: s.cookieName(name), Value: value, Path: "/", MaxAge: maxAge,
 		HttpOnly: true, Secure: s.Config.SecureCookies(), SameSite: http.SameSiteLaxMode,
 	})
 }
@@ -120,7 +124,7 @@ func (s *Server) oauthStart(w http.ResponseWriter, r *http.Request) {
 		internalError(w, r, err)
 		return
 	}
-	s.setCookie(w, flowCookie, "/api/auth/", sealed, flowTTL)
+	s.setCookie(w, flowCookie, sealed, flowTTL)
 	http.Redirect(w, r, target, http.StatusFound)
 }
 
@@ -135,12 +139,12 @@ func errorPage(f oauthFlow) string {
 func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	fail := func(page, code string) { http.Redirect(w, r, withQuery(page, "error", code), http.StatusFound) }
 
-	c, err := r.Cookie(flowCookie)
+	c, err := r.Cookie(s.cookieName(flowCookie))
 	if err != nil {
 		fail("/login", "expired")
 		return
 	}
-	s.setCookie(w, flowCookie, "/api/auth/", "", 0)
+	s.setCookie(w, flowCookie, "", 0)
 	flow, err := seal.OpenJSON[oauthFlow](s.Sealer, flowCookie, c.Value)
 	q := r.URL.Query()
 	if err != nil || flow.Provider != r.PathValue("provider") || flow.State != q.Get("state") {
@@ -194,7 +198,7 @@ func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
 			internalError(w, r, err)
 			return
 		}
-		s.setCookie(w, mergeCookie, "/api/account/merge", sealed, mergeTTL)
+		s.setCookie(w, mergeCookie, sealed, mergeTTL)
 		http.Redirect(w, r, withQuery("/settings", "merge", "1"), http.StatusFound)
 	case errors.Is(err, auth.ErrProviderLinked):
 		fail("/settings", "provider_linked")
@@ -207,7 +211,7 @@ func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) readMerge(r *http.Request, cur auth.Current) (pendingMerge, bool) {
-	c, err := r.Cookie(mergeCookie)
+	c, err := r.Cookie(s.cookieName(mergeCookie))
 	if err != nil {
 		return pendingMerge{}, false
 	}
@@ -235,7 +239,7 @@ func (s *Server) confirmMerge(w http.ResponseWriter, r *http.Request, cur auth.C
 		writeError(w, http.StatusNotFound, "no account merge is pending")
 		return
 	}
-	s.setCookie(w, mergeCookie, "/api/account/merge", "", 0)
+	s.setCookie(w, mergeCookie, "", 0)
 	s.Gateway.EndUserStreams(r.Context(), m.OtherID, gateway.EndAccountMerged)
 	if err := s.Accounts.Merge(r.Context(), cur.User.ID, m.OtherID); err != nil {
 		internalError(w, r, err)
@@ -250,6 +254,6 @@ func (s *Server) confirmMerge(w http.ResponseWriter, r *http.Request, cur auth.C
 }
 
 func (s *Server) cancelMerge(w http.ResponseWriter, r *http.Request, cur auth.Current) {
-	s.setCookie(w, mergeCookie, "/api/account/merge", "", 0)
+	s.setCookie(w, mergeCookie, "", 0)
 	w.WriteHeader(http.StatusNoContent)
 }

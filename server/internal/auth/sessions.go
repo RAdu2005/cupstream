@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	CookieName = "cupstream_session"
+	sessionCookie = "cupstream_session"
 
 	sessionTTL = 30 * 24 * time.Hour
 	// A session's last_seen_at and expiry are refreshed at most this often.
@@ -33,15 +33,27 @@ const (
 	KindApp Kind = "app"
 )
 
+// CookieName is the name a cookie is set under. Over HTTPS it carries the
+// __Host- prefix, so browsers refuse the cookie from another subdomain of
+// the site (which could otherwise plant its own session or OAuth state).
+// Such cookies must have Path=/ and no Domain.
+func CookieName(base string, secure bool) string {
+	if secure {
+		return "__Host-" + base
+	}
+	return base
+}
+
 // Sessions creates, resolves and destroys sessions.
 type Sessions struct {
 	db     *store.DB
 	secure bool
+	name   string
 	now    func() time.Time
 }
 
 func NewSessions(db *store.DB, secureCookies bool) *Sessions {
-	return &Sessions{db: db, secure: secureCookies, now: time.Now}
+	return &Sessions{db: db, secure: secureCookies, name: CookieName(sessionCookie, secureCookies), now: time.Now}
 }
 
 // NewToken returns a random 128-bit token and its SHA-256 hash.
@@ -81,7 +93,7 @@ func (s *Sessions) Start(ctx context.Context, w http.ResponseWriter, userID stri
 // End deletes the request's session, if any, and clears the cookie.
 func (s *Sessions) End(ctx context.Context, w http.ResponseWriter, r *http.Request) error {
 	http.SetCookie(w, s.cookie("", -1))
-	c, err := r.Cookie(CookieName)
+	c, err := r.Cookie(s.name)
 	if err != nil {
 		return nil
 	}
@@ -90,7 +102,7 @@ func (s *Sessions) End(ctx context.Context, w http.ResponseWriter, r *http.Reque
 
 func (s *Sessions) cookie(value string, maxAge int) *http.Cookie {
 	return &http.Cookie{
-		Name:     CookieName,
+		Name:     s.name,
 		Value:    value,
 		Path:     "/",
 		MaxAge:   maxAge,
@@ -118,7 +130,7 @@ func FromContext(ctx context.Context) (Current, bool) {
 // context. Requests without a valid session pass through anonymously.
 func (s *Sessions) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c, err := r.Cookie(CookieName)
+		c, err := r.Cookie(s.name)
 		if err != nil || c.Value == "" {
 			next.ServeHTTP(w, r)
 			return
