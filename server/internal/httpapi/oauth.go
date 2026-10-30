@@ -247,6 +247,7 @@ func (s *Server) confirmMerge(w http.ResponseWriter, r *http.Request, cur auth.C
 		return
 	}
 	s.Realtime.CloseUser(m.OtherID)
+	s.friendsChanged(cur.User.ID) // the other account's friends are now here
 	if m.Provider == oauth.Discord && m.Token != nil && s.Discord != nil {
 		if err := s.Discord.Store(r.Context(), cur.User.ID, m.Token); err != nil {
 			slog.WarnContext(r.Context(), "storing discord token after merge failed", "err", err)

@@ -23,6 +23,15 @@ type DiscordToken struct {
 	GuildsSyncedAt        int64
 }
 
+type Friendship struct {
+	UserA       string
+	UserB       string
+	Status      string
+	RequestedBy string
+	CreatedAt   int64
+	AcceptedAt  sql.NullInt64
+}
+
 type Identity struct {
 	Provider  string
 	Subject   string
@@ -115,6 +124,12 @@ type User struct {
 	DisplayName string
 	AvatarURL   sql.NullString
 	CreatedAt   int64
+}
+
+type UserBlock struct {
+	UserID    string
+	BlockedID string
+	CreatedAt int64
 }
 
 type UserGuild struct {
