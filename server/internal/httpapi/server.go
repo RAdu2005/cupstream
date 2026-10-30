@@ -102,6 +102,7 @@ func (s *Server) Handler() http.Handler {
 	// visitor's address, and send plain-HTTP visitors to HTTPS.
 	h = clientIPFrom(s.Config.ClientIPHeader, h)
 	h = redirectToHTTPS(s.Config.ClientIPHeader != "" && s.Config.SecureCookies(), h)
+	h = securityHeaders(s.Config.SecureCookies(), h)
 	return recoverPanics(h)
 }
 

@@ -59,3 +59,19 @@ func TestRedirectToHTTPS(t *testing.T) {
 		}
 	}
 }
+
+func TestSecurityHeaders(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})
+	for _, hsts := range []bool{false, true} {
+		rec := httptest.NewRecorder()
+		securityHeaders(hsts, next).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+		for _, name := range []string{"Content-Security-Policy", "X-Frame-Options", "X-Content-Type-Options", "Referrer-Policy", "Cross-Origin-Opener-Policy"} {
+			if rec.Header().Get(name) == "" {
+				t.Errorf("hsts=%v: %s not set", hsts, name)
+			}
+		}
+		if got := rec.Header().Get("Strict-Transport-Security") != ""; got != hsts {
+			t.Errorf("hsts=%v: Strict-Transport-Security set = %v", hsts, got)
+		}
+	}
+}

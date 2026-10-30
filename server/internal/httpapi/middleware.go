@@ -105,3 +105,30 @@ func redirectToHTTPS(enabled bool, next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+// contentSecurityPolicy allows only the site's own scripts, styles and API,
+// plus Google and Discord avatars and server icons. WebRTC media is not
+// covered by CSP; video elements play it through srcObject.
+const contentSecurityPolicy = "default-src 'self'; " +
+	"img-src 'self' data: https://*.googleusercontent.com https://cdn.discordapp.com; " +
+	"object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+
+// securityHeaders sets browser protections on every response: the content
+// security policy, no framing by other sites (clickjacking), no MIME
+// sniffing, origin-only referrers to other sites, and, when the site is
+// served over HTTPS, HSTS for this host only (no includeSubDomains: other
+// subdomains of the domain are not ours to decide for).
+func securityHeaders(hsts bool, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Content-Security-Policy", contentSecurityPolicy)
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		h.Set("Cross-Origin-Opener-Policy", "same-origin")
+		if hsts {
+			h.Set("Strict-Transport-Security", "max-age=31536000")
+		}
+		next.ServeHTTP(w, r)
+	})
+}
