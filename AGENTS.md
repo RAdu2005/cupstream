@@ -9,7 +9,7 @@ Rules for coding agents (and a summary for people). The README has the layout, t
 - Never commit or push to `master`; a ruleset rejects it anyway. Changes reach `master` only through a pull request whose checks (`server`, `web`, `smoke`) pass.
 - Before opening the pull request, run `make test`, and `make check-generated` if you touched queries, migrations or `server/internal/api`. Open it with `gh pr create`; describe what changed, how you checked it, and anything to do by hand on the server.
 - **Do not merge pull requests and do not enable auto-merge.** The maintainer merges, and merging deploys.
-- The main checkout (the repository's first worktree) stays on `master`, clean; only `git pull --ff-only` there.
+- The main checkout (the repository's first worktree) stays on `master`, clean. `scripts/tidy.sh` (a systemd user timer, or `make tidy`) fast-forwards it and deletes local branches whose pull request was merged; GitHub deletes the remote branch on merge. Do not commit or switch branches there.
 - Tags `v*` publish a GitHub release. Create one only when asked.
 
 ## Deployment

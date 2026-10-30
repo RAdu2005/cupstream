@@ -5,7 +5,7 @@ GO_TOOL := $(MISE) go tool -modfile=tools/go.mod
 # The commit the binary reports in /healthz ("-dirty" with local changes).
 VERSION ?= $(shell git describe --always --dirty --abbrev=40 --exclude='*' 2>/dev/null || echo dev)
 
-.PHONY: help dev build test test-server test-web generate check-generated images clean
+.PHONY: help dev build test test-server test-web generate check-generated images tidy clean
 
 help:
 	@echo "make dev               MediaMTX (Docker) + Go server + Vite on http://localhost:5173"
@@ -14,6 +14,7 @@ help:
 	@echo "make generate          sqlc queries and TypeScript API types"
 	@echo "make check-generated   fail if generated code is out of date"
 	@echo "make images            build the cupstream and MediaMTX Docker images"
+	@echo "make tidy              update master and delete merged branches"
 
 dev:
 	$(MISE) scripts/dev.sh
@@ -41,6 +42,9 @@ check-generated: generate
 
 images:
 	docker compose build
+
+tidy:
+	scripts/tidy.sh
 
 clean:
 	rm -rf bin web/dist
