@@ -8,6 +8,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"strings"
 )
 
 const acceptFriendRequest = `-- name: AcceptFriendRequest :exec
@@ -113,6 +114,22 @@ type DeleteFriendshipParams struct {
 
 func (q *Queries) DeleteFriendship(ctx context.Context, arg DeleteFriendshipParams) error {
 	_, err := q.db.ExecContext(ctx, deleteFriendship, arg.UserA, arg.UserB)
+	return err
+}
+
+const dismissSuggestion = `-- name: DismissSuggestion :exec
+INSERT INTO friend_dismissals (user_id, other_id, created_at) VALUES (?, ?, ?)
+ON CONFLICT DO NOTHING
+`
+
+type DismissSuggestionParams struct {
+	UserID    string
+	OtherID   string
+	CreatedAt int64
+}
+
+func (q *Queries) DismissSuggestion(ctx context.Context, arg DismissSuggestionParams) error {
+	_, err := q.db.ExecContext(ctx, dismissSuggestion, arg.UserID, arg.OtherID, arg.CreatedAt)
 	return err
 }
 
@@ -273,6 +290,136 @@ func (q *Queries) ListFriendships(ctx context.Context, userID string) ([]ListFri
 	return items, nil
 }
 
+const listSharedGuilds = `-- name: ListSharedGuilds :many
+SELECT theirs.user_id AS other_id, mine.guild_id, mine.name, mine.icon
+FROM user_guilds AS mine
+JOIN user_guilds AS theirs ON theirs.guild_id = mine.guild_id
+WHERE mine.user_id = ?1 AND theirs.user_id IN (/*SLICE:other_ids*/?)
+  AND mine.suggestions_enabled = 1 AND theirs.suggestions_enabled = 1
+ORDER BY mine.name COLLATE NOCASE
+`
+
+type ListSharedGuildsParams struct {
+	UserID   string
+	OtherIds []string
+}
+
+type ListSharedGuildsRow struct {
+	OtherID string
+	GuildID string
+	Name    string
+	Icon    string
+}
+
+// The servers, with suggestions on for both, that user_id shares with others.
+func (q *Queries) ListSharedGuilds(ctx context.Context, arg ListSharedGuildsParams) ([]ListSharedGuildsRow, error) {
+	query := listSharedGuilds
+	var queryParams []interface{}
+	queryParams = append(queryParams, arg.UserID)
+	if len(arg.OtherIds) > 0 {
+		for _, v := range arg.OtherIds {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:other_ids*/?", strings.Repeat(",?", len(arg.OtherIds))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:other_ids*/?", "NULL", 1)
+	}
+	rows, err := q.db.QueryContext(ctx, query, queryParams...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSharedGuildsRow{}
+	for rows.Next() {
+		var i ListSharedGuildsRow
+		if err := rows.Scan(
+			&i.OtherID,
+			&i.GuildID,
+			&i.Name,
+			&i.Icon,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSuggestions = `-- name: ListSuggestions :many
+SELECT users.id, users.handle, users.display_name, users.avatar_url, users.created_at, CAST(COUNT(*) AS INTEGER) AS shared
+FROM user_guilds AS mine
+JOIN user_guilds AS theirs ON theirs.guild_id = mine.guild_id AND theirs.user_id <> mine.user_id
+JOIN users ON users.id = theirs.user_id
+WHERE mine.user_id = ?1 AND mine.suggestions_enabled = 1 AND theirs.suggestions_enabled = 1
+  AND EXISTS (SELECT 1 FROM identities WHERE identities.user_id = users.id AND identities.provider = 'discord')
+  AND NOT EXISTS (
+      SELECT 1 FROM friendships
+      WHERE (friendships.user_a = ?1 AND friendships.user_b = users.id)
+         OR (friendships.user_b = ?1 AND friendships.user_a = users.id)
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM user_blocks
+      WHERE (user_blocks.user_id = ?1 AND user_blocks.blocked_id = users.id)
+         OR (user_blocks.user_id = users.id AND user_blocks.blocked_id = ?1)
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM friend_dismissals
+      WHERE friend_dismissals.user_id = ?1 AND friend_dismissals.other_id = users.id
+  )
+GROUP BY users.id
+ORDER BY shared DESC, users.display_name COLLATE NOCASE, users.handle
+LIMIT ?2
+`
+
+type ListSuggestionsParams struct {
+	UserID string
+	Max    int64
+}
+
+type ListSuggestionsRow struct {
+	User   User
+	Shared int64
+}
+
+// People who share a Discord server with user_id where both have suggestions
+// on, have Discord linked, and are not already friends, asked, blocked
+// either way or dismissed. Most shared servers first.
+func (q *Queries) ListSuggestions(ctx context.Context, arg ListSuggestionsParams) ([]ListSuggestionsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listSuggestions, arg.UserID, arg.Max)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSuggestionsRow{}
+	for rows.Next() {
+		var i ListSuggestionsRow
+		if err := rows.Scan(
+			&i.User.ID,
+			&i.User.Handle,
+			&i.User.DisplayName,
+			&i.User.AvatarURL,
+			&i.User.CreatedAt,
+			&i.Shared,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUserFriendships = `-- name: ListUserFriendships :many
 SELECT user_a, user_b, status, requested_by, created_at, accepted_at FROM friendships WHERE user_a = ?1 OR user_b = ?1
 `
@@ -337,6 +484,23 @@ type MoveBlocksOfParams struct {
 
 func (q *Queries) MoveBlocksOf(ctx context.Context, arg MoveBlocksOfParams) error {
 	_, err := q.db.ExecContext(ctx, moveBlocksOf, arg.ToUser, arg.FromUser)
+	return err
+}
+
+const moveDismissals = `-- name: MoveDismissals :exec
+INSERT OR IGNORE INTO friend_dismissals (user_id, other_id, created_at)
+SELECT ?1, other_id, created_at FROM friend_dismissals
+WHERE friend_dismissals.user_id = ?2 AND other_id <> ?1
+`
+
+type MoveDismissalsParams struct {
+	ToUser   string
+	FromUser string
+}
+
+// Merging accounts: the absorbed user's dismissals.
+func (q *Queries) MoveDismissals(ctx context.Context, arg MoveDismissalsParams) error {
+	_, err := q.db.ExecContext(ctx, moveDismissals, arg.ToUser, arg.FromUser)
 	return err
 }
 

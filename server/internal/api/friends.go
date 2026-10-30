@@ -51,3 +51,17 @@ type Notification struct {
 type FriendsChanged struct {
 	Type string `json:"type" tstype:"'friendsChanged'"`
 }
+
+// FriendSuggestion is someone the user may know: a CupStream user with
+// Discord linked who shares Discord servers with them. GET
+// /api/friends/suggestions lists them, those sharing the most servers first.
+type FriendSuggestion struct {
+	User   User          `json:"user"`
+	Guilds []SharedGuild `json:"guilds"`
+}
+
+type SharedGuild struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	IconURL string `json:"iconUrl,omitempty"`
+}

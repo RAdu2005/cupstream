@@ -43,6 +43,15 @@ func exec(t *testing.T, db *store.DB, query string, args ...any) {
 	}
 }
 
+func count(t *testing.T, db *store.DB, query string, args ...any) int {
+	t.Helper()
+	var n int
+	if err := db.SQL.QueryRow(query, args...).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
 func relationOf(t *testing.T, s *Service, a, b string) Relation {
 	t.Helper()
 	rel, _, err := relation(context.Background(), s.db.Queries, a, b)
@@ -261,6 +270,7 @@ func TestMerge(t *testing.T) {
 	db.BlockUser(ctx, store.BlockUserParams{UserID: gone, BlockedID: blockee})
 	db.BlockUser(ctx, store.BlockUserParams{UserID: blocker, BlockedID: gone})
 	set(gone, blocker, statusPending, gone, 10)
+	db.DismissSuggestion(ctx, store.DismissSuggestionParams{UserID: gone, OtherID: asked})
 
 	err := db.Tx(ctx, func(q *store.Queries) error {
 		if err := Merge(ctx, q, gone, keep); err != nil {
@@ -288,6 +298,9 @@ func TestMerge(t *testing.T) {
 	if _, _, err := s.Lookup(ctx, keep, "blocker"); !errors.Is(err, ErrNoUser) {
 		t.Errorf("keep looking up blocker: %v", err)
 	}
+	if n := count(t, db, `SELECT COUNT(*) FROM friend_dismissals WHERE user_id = ? AND other_id = ?`, keep, asked); n != 1 {
+		t.Errorf("dismissal not carried over")
+	}
 	a, b := pair(keep, both)
 	if f, _ := db.GetFriendship(ctx, store.GetFriendshipParams{UserA: a, UserB: b}); f.AcceptedAt.Int64 != 6 || f.RequestedBy != both {
 		t.Errorf("keep and both: %+v", f)
@@ -309,5 +322,82 @@ func TestDeleteUser(t *testing.T) {
 	}
 	if b, _ := s.Blocked(ctx, cy); len(b) != 0 {
 		t.Fatalf("cy's blocks: %+v", b)
+	}
+}
+
+func TestSuggestions(t *testing.T) {
+	ctx := context.Background()
+	s, db := newService(t)
+	people := map[string]string{}
+	for _, h := range []string{"ana", "bob", "cy", "dan", "eve", "fay", "gus", "hal", "ivy", "jon", "kim"} {
+		people[h] = user(t, db, h)
+		if h != "dan" { // dan has no Discord account linked
+			if err := db.CreateIdentity(ctx, store.CreateIdentityParams{Provider: "discord", Subject: h, UserID: people[h], Username: h}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	member := func(h, guild string, on bool) {
+		if err := db.UpsertUserGuild(ctx, store.UpsertUserGuildParams{UserID: people[h], GuildID: guild, Name: "Server " + guild, SuggestionsEnabled: on}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, h := range []string{"ana", "bob", "cy", "dan", "gus", "hal", "ivy", "jon", "kim"} {
+		member(h, "1", true)
+	}
+	member("ana", "2", true)
+	member("bob", "2", true)
+	member("ana", "big", false) // ana turned this server off (or it is large)
+	member("eve", "big", true)
+	member("ana", "3", true)
+	member("fay", "3", false) // fay turned it off on her side
+
+	ana := people["ana"]
+	s.Request(ctx, ana, people["gus"])
+	s.Accept(ctx, people["gus"], ana)
+	s.Request(ctx, people["hal"], ana)
+	s.Block(ctx, people["ivy"], ana)
+	s.Block(ctx, ana, people["jon"])
+	s.Request(ctx, people["kim"], ana)
+	s.RemoveRequest(ctx, ana, people["kim"]) // declined
+
+	got := func() string {
+		t.Helper()
+		list, err := s.Suggestions(ctx, ana)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, sg := range list {
+			var gs []string
+			for _, g := range sg.Guilds {
+				gs = append(gs, g.ID)
+			}
+			out = append(out, fmt.Sprintf("%s%v", sg.User.Handle, gs))
+		}
+		return fmt.Sprint(out)
+	}
+	if g := got(); g != "[bob[1 2] cy[1]]" {
+		t.Fatalf("suggestions = %s", g)
+	}
+
+	if err := s.Dismiss(ctx, ana, people["cy"]); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Dismiss(ctx, ana, "nobody"); !errors.Is(err, ErrNoUser) {
+		t.Fatalf("dismissing an unknown user: %v", err)
+	}
+	if g := got(); g != "[bob[1 2]]" {
+		t.Fatalf("after dismissing cy: %s", g)
+	}
+	// Turning server 1 off leaves server 2; unlinking Discord (which deletes
+	// the server list) leaves nothing.
+	db.SetGuildSuggestions(ctx, store.SetGuildSuggestionsParams{SuggestionsEnabled: false, UserID: ana, GuildID: "1"})
+	if g := got(); g != "[bob[2]]" {
+		t.Fatalf("after turning server 1 off: %s", g)
+	}
+	db.DeleteUserGuilds(ctx, people["bob"])
+	if g := got(); g != "[]" {
+		t.Fatalf("after bob unlinked Discord: %s", g)
 	}
 }

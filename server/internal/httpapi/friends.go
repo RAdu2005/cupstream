@@ -156,3 +156,30 @@ func (s *Server) unblock(w http.ResponseWriter, r *http.Request, cur auth.Curren
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
+
+func (s *Server) listSuggestions(w http.ResponseWriter, r *http.Request, cur auth.Current) {
+	list, err := s.Friends.Suggestions(r.Context(), cur.User.ID)
+	if err != nil {
+		internalError(w, r, err)
+		return
+	}
+	out := []api.FriendSuggestion{}
+	for _, sg := range list {
+		guilds := []api.SharedGuild{}
+		for _, g := range sg.Guilds {
+			guilds = append(guilds, api.SharedGuild{ID: g.ID, Name: g.Name, IconURL: g.IconURL})
+		}
+		out = append(out, api.FriendSuggestion{User: view.User(sg.User), Guilds: guilds})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// dismissSuggestion serves DELETE /api/friends/suggestions/{id}: that person
+// is not suggested again.
+func (s *Server) dismissSuggestion(w http.ResponseWriter, r *http.Request, cur auth.Current) {
+	if err := s.Friends.Dismiss(r.Context(), cur.User.ID, r.PathValue("id")); err != nil {
+		friendError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}

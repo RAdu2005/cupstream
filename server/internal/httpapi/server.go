@@ -102,6 +102,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/friends/requests/{id}/accept", requireUser(s.acceptFriendRequest))
 	mux.Handle("DELETE /api/friends/requests/{id}", requireUser(s.removeFriendRequest))
 	mux.Handle("DELETE /api/friends/{id}", requireUser(s.unfriend))
+	mux.Handle("GET /api/friends/suggestions", requireUser(s.listSuggestions))
+	mux.Handle("DELETE /api/friends/suggestions/{id}", requireUser(s.dismissSuggestion))
 	mux.Handle("GET /api/friends/blocked", requireUser(s.listBlocked))
 	mux.Handle("PUT /api/friends/blocked/{id}", requireUser(s.block))
 	mux.Handle("DELETE /api/friends/blocked/{id}", requireUser(s.unblock))
