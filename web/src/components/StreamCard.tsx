@@ -31,6 +31,14 @@ export function StreamCard({
       aria-label={`Watch ${stream.user.displayName}'s stream`}
     >
       <div className="relative flex aspect-video items-center justify-center bg-black">
+        {stream.thumbnailAt ? (
+          // thumbnailAt changes with every upload, so it also refreshes the picture.
+          <img
+            src={`/api/streams/${stream.id}/thumbnail?v=${stream.thumbnailAt}`}
+            alt=""
+            className="absolute inset-0 size-full object-cover"
+          />
+        ) : null}
         {live ? (
           <Play
             className="absolute size-10 rounded-full bg-black/60 p-2.5 opacity-80 transition-opacity group-hover:opacity-100"

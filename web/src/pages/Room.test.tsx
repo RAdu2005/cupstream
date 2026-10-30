@@ -150,11 +150,18 @@ test('cards start streams in a focus or grid layout, up to four at once', async 
     state: 'live' as const,
     startedAt: stream.startedAt + i,
     user: { id: `u${i + 10}`, handle: `user${i}`, displayName: `User ${i}` },
+    thumbnailAt: i === 4 ? 1_800_000_000_123 : undefined,
   }));
   setup([json(200, { ...room, streams })]);
   const cards = within(await screen.findByRole('region', { name: 'Live in this room' }));
   expect(cards.getByText('Choose a stream to watch')).toBeInTheDocument();
 
+  // Cards show the sender's latest thumbnail, refreshed as it changes.
+  expect(cards.getByRole('button', { name: "Watch User 4's stream" }).querySelector('img')).toHaveAttribute(
+    'src',
+    '/api/streams/s5/thumbnail?v=1800000000123',
+  );
+  expect(cards.getByRole('button', { name: "Watch User 0's stream" }).querySelector('img')).toBeNull();
   fireEvent.click(cards.getByRole('button', { name: "Watch User 0's stream" }));
   const main = screen.getByRole('group', { name: "User 0's stream" });
   expect(within(main).getByRole('button', { name: 'Mute' })).toBeInTheDocument(); // the focused stream is heard
