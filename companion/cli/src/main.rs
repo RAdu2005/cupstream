@@ -449,6 +449,13 @@ fn describe_audio(streams: &[audio::AudioStream]) -> String {
 }
 
 async fn show_audio_until_ctrl_c(capture: &audio::AudioCapture) {
+    // WASAPI leaves one process tree out without listing what plays; the
+    // log above says which process that is.
+    if cfg!(windows) {
+        println!("capturing; Ctrl+C to stop");
+        let _ = tokio::signal::ctrl_c().await;
+        return;
+    }
     let mut last = String::new();
     let ctrl_c = tokio::signal::ctrl_c();
     tokio::pin!(ctrl_c);
