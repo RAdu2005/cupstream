@@ -4,8 +4,9 @@
 #   docker compose up -d mediamtx     # development (scripts/dev.sh does this)
 #   docker compose up -d --build      # everything, e.g. for the CI smoke test
 #
-# The fixed project name makes every git worktree share one MediaMTX container
-# (on the host network, a second one could not bind its ports).
+# scripts/dev.sh gives each git worktree its own MediaMTX container (project
+# cupstream-<port>) on its own ports, through the MTX_*ADDRESS variables below;
+# without them, MediaMTX uses the ports in deploy/mediamtx/mediamtx.yml.
 
 name: cupstream
 
@@ -17,6 +18,11 @@ services:
     restart: unless-stopped
     environment:
       MTX_WEBRTCADDITIONALHOSTS: ${MTX_WEBRTCADDITIONALHOSTS:-}
+      MTX_APIADDRESS: ${MTX_APIADDRESS:-127.0.0.1:9997}
+      MTX_WEBRTCADDRESS: ${MTX_WEBRTCADDRESS:-127.0.0.1:8889}
+      MTX_WEBRTCLOCALUDPADDRESS: ${MTX_WEBRTCLOCALUDPADDRESS-:8189}
+      # Empty turns ICE over TCP off (ffmpeg's WHIP client rejects it).
+      MTX_WEBRTCLOCALTCPADDRESS: ${MTX_WEBRTCLOCALTCPADDRESS-:8189}
       # Collect garbage less often: MediaMTX allocates for every packet, and
       # the server has memory to spare (an upstream measurement: 64% of a
       # core at the default against 38% at GOGC=800).

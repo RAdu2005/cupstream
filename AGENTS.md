@@ -27,7 +27,7 @@ The repository and its CI logs are public. Keep server addresses, hostnames othe
 
 ## Development
 
-- `make dev` runs MediaMTX in Docker (one container shared by all worktrees), the Go server and Vite on http://localhost:5173, with a development login. A worktree without a `.env` uses the main checkout's.
-- To run a second copy from another worktree: `DEV_WEB_PORT=5174 DEV_SERVER_PORT=8081 make dev`. Google and Discord sign-in only work on port 5173.
+- `make dev` runs MediaMTX in Docker, the Go server and Vite on http://localhost:5173, with a development login. A worktree without a `.env` uses the main checkout's.
+- To run a second copy from another worktree: `DEV_WEB_PORT=5174 DEV_SERVER_PORT=8081 make dev`. It gets its own MediaMTX container, with ports moved by the same offset (a server closes media sessions it did not create, so copies must not share one). Google and Discord sign-in only work on port 5173.
 - Each worktree has its own development database in `data/`.
 - Match the surrounding code: its comment density, naming and idiom. Generated files (`*.gen.go`, `web/src/api/types.gen.ts`) come from `make generate`; never edit them by hand.
