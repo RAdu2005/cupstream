@@ -128,6 +128,11 @@ func (g *Gateway) SetViewerPaused(ctx context.Context, streamID, secret string, 
 	if cur.held && paused {
 		after = mediamtx.AllTracks
 	}
+	// Resuming a session that sent nothing makes it one more stream.
+	if !paused && !cur.watching() && !(after.Video && after.Audio) && g.watchingLocked(cur.userID, cur.tab, cur.mtxID) >= MaxWatching {
+		g.mu.Unlock()
+		return errTooManyStreams
+	}
 	g.mu.Unlock()
 
 	if err := g.applyPause(ctx, sess.mtxID, before, after); err != nil {
@@ -235,6 +240,8 @@ func (g *Gateway) HandleSessionControl(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	case errors.Is(err, errNoSession):
 		writeErr(w, http.StatusNotFound, "", err.Error())
+	case errors.Is(err, errTooManyStreams):
+		writeErr(w, http.StatusConflict, CodeTooManyStreams, err.Error())
 	case errors.Is(err, errPauseUnsupported):
 		writeErr(w, http.StatusNotImplemented, "pause_unsupported", err.Error())
 	case errors.As(err, &ae):
