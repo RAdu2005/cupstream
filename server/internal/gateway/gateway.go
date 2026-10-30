@@ -82,6 +82,7 @@ type liveStream struct {
 	since time.Time // when the current state began
 	peak  int
 	stats streamStats
+	thumb *Thumbnail
 }
 
 type session struct {
@@ -120,6 +121,8 @@ type LiveStream struct {
 	State   State
 	Viewers int
 	Stats   StreamStats
+	// ThumbnailAt is when the latest thumbnail arrived; zero without one.
+	ThumbnailAt time.Time
 }
 
 type Gateway struct {
@@ -644,7 +647,11 @@ func (g *Gateway) CloseTabSessions(ctx context.Context, userID, tab string) int 
 }
 
 func (g *Gateway) snapshotLocked(id string, s *liveStream, counts map[string]int) LiveStream {
-	return LiveStream{Stream: s.rec, State: s.state, Viewers: counts[id], Stats: s.stats.public()}
+	ls := LiveStream{Stream: s.rec, State: s.state, Viewers: counts[id], Stats: s.stats.public()}
+	if s.thumb != nil {
+		ls.ThumbnailAt = s.thumb.At
+	}
+	return ls
 }
 
 // RoomStreams lists the active streams of a room, oldest first.

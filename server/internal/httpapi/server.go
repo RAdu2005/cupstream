@@ -92,6 +92,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/media/{stream}/{kind}/{secret}", s.Gateway.HandleSession)
 	mux.HandleFunc("POST /api/media/{stream}/whep/{secret}/{action}", s.Gateway.HandleSessionControl)
 
+	// Stream thumbnails: the sender uploads them with its publish token.
+	mux.HandleFunc("PUT /api/streams/{id}/thumbnail", s.Gateway.HandleThumbnailUpload)
+	mux.HandleFunc("GET /api/streams/{id}/thumbnail", s.thumbnail)
+
 	// Realtime: stream events, presence and chat. The hub checks the Origin
 	// header itself, since the cross-origin protection below skips GET.
 	mux.HandleFunc("GET /api/realtime", s.Realtime.Serve)
