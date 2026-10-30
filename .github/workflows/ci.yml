@@ -68,6 +68,47 @@ jobs:
         if: always()
         run: docker compose logs
 
+  # Every push to master goes to production once the checks pass. The
+  # production environment (master only) holds an SSH key that can run
+  # nothing but deploy/cupstream/cupstream-deploy on the server. To roll back,
+  # revert the change, or re-run this job in the run of an earlier commit.
+  # These logs are public: never print the host or server logs here.
+  deploy:
+    needs: [server, web, smoke]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://cupstream.larp.love
+    concurrency:
+      group: production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+      - run: make build VERSION=$GITHUB_SHA
+      - name: Install on the server
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy
+          chmod 600 ~/.ssh/deploy
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          ssh -i ~/.ssh/deploy -o BatchMode=yes -o IdentitiesOnly=yes \
+            deploy@"$DEPLOY_HOST" "$GITHUB_SHA" < bin/cupstream
+      - name: The public site runs this commit
+        run: |
+          for i in $(seq 30); do
+            v=$(curl -sf https://cupstream.larp.love/healthz | jq -r .version) || true
+            [ "$v" = "$GITHUB_SHA" ] && exit 0
+            sleep 2
+          done
+          echo "https://cupstream.larp.love reports version '${v:-}', expected $GITHUB_SHA"
+          exit 1
+
   release:
     needs: [server, web, smoke]
     if: startsWith(github.ref, 'refs/tags/v')

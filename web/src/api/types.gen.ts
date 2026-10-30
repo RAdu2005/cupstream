@@ -44,6 +44,7 @@ export interface DevLoginRequest {
  */
 export interface Health {
   status: 'ok' | 'degraded';
+  version: string; // commit the server was built from, or "dev"
   database: boolean;
   mediamtx: MediaMTXHealth;
 }

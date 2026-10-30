@@ -2,6 +2,8 @@
 # mise is installed, so the shell does not need mise activated.
 MISE := $(shell command -v mise >/dev/null 2>&1 && echo "mise x --")
 GO_TOOL := $(MISE) go tool -modfile=tools/go.mod
+# The commit the binary reports in /healthz ("-dirty" with local changes).
+VERSION ?= $(shell git describe --always --dirty --abbrev=40 --exclude='*' 2>/dev/null || echo dev)
 
 .PHONY: help dev build test test-server test-web generate check-generated images clean
 
@@ -20,7 +22,7 @@ build:
 	cd web && $(MISE) npm ci && $(MISE) npm run build
 	find server/internal/webui/dist -mindepth 1 ! -name .gitkeep -delete
 	cp -r web/dist/. server/internal/webui/dist/
-	cd server && CGO_ENABLED=0 $(MISE) go build -trimpath -ldflags="-s -w" -o ../bin/cupstream ./cmd/cupstream
+	cd server && CGO_ENABLED=0 $(MISE) go build -trimpath -ldflags="-s -w -X main.version=$(VERSION)" -o ../bin/cupstream ./cmd/cupstream
 
 test: test-server test-web
 

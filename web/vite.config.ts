@@ -4,10 +4,11 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 
-// The Go server listens on :8080 in development (see scripts/dev.sh).
-// changeOrigin stays false so the server sees Host: localhost:5173, which
-// matches the browser's Origin for its cross-origin checks.
-const server = 'http://127.0.0.1:8080';
+// The Go server listens on 127.0.0.1:8080 in development, or wherever
+// scripts/dev.sh puts it (CUPSTREAM_ADDR). changeOrigin stays false so the
+// server sees Host: localhost:5173, which matches the browser's Origin for its
+// cross-origin checks.
+const server = `http://${process.env.CUPSTREAM_ADDR ?? '127.0.0.1:8080'}`;
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],

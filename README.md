@@ -11,7 +11,7 @@ The design and the implementation plan are in [output/md/cupstream-project-overv
 | `server/` | Go server: OAuth sign-in and accounts, rooms and access checks (`internal/access`), the WHIP/WHEP media gateway (`internal/gateway`), and later realtime and the Discord bot. SQLite with goose migrations and sqlc queries. |
 | `web/` | Website: React, TypeScript, Vite, Tailwind CSS, TanStack Query, React Router. |
 | `deploy/mediamtx/` | MediaMTX image, built from [our fork](https://github.com/RAdu2005/mediamtx) at a pinned tag, and its configuration. |
-| `deploy/cupstream/` | systemd and OpenRC service files. |
+| `deploy/cupstream/` | systemd and OpenRC service files, and `cupstream-deploy`, which CI runs on the production server. |
 
 ## Development
 
@@ -43,6 +43,10 @@ The development login needs no setup. To try the real providers locally, create 
 ### Streaming locally
 
 In your room's settings, generate a stream key. In OBS, choose the **WHIP** service with the server `http://localhost:5173/whip` and the key as the Bearer token; a co-streamer adds `?room=<slug>` to stream into someone else's room. Set OBS's keyframe interval to 1–2 seconds: OBS ignores requests for keyframes, so a new viewer waits up to one interval for the picture (browsers and the desktop app answer them, so their viewers start almost at once). The room API reports each stream's measured `keyFrameInterval`. Without OBS, ffmpeg 8 or later can publish a test pattern, but its WHIP client rejects ICE-over-TCP candidates, so run MediaMTX with `MTX_WEBRTCLOCALTCPADDRESS=` for that.
+
+## Deployment
+
+Every merge into `master` is deployed to https://cupstream.larp.love once CI passes; `/healthz` reports the running commit. [AGENTS.md](AGENTS.md) has the rules for branches, pull requests, deploys and rollbacks.
 
 ## Configuration
 

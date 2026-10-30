@@ -3,6 +3,11 @@
 #
 #   docker compose up -d mediamtx     # development (scripts/dev.sh does this)
 #   docker compose up -d --build      # everything, e.g. for the CI smoke test
+#
+# The fixed project name makes every git worktree share one MediaMTX container
+# (on the host network, a second one could not bind its ports).
+
+name: cupstream
 
 services:
   mediamtx:

@@ -30,6 +30,7 @@ type DevLoginRequest struct {
 // Health is the response of GET /healthz.
 type Health struct {
 	Status   string         `json:"status" tstype:"'ok' | 'degraded'"`
+	Version  string         `json:"version"` // commit the server was built from, or "dev"
 	Database bool           `json:"database"`
 	MediaMTX MediaMTXHealth `json:"mediamtx"`
 }

@@ -13,7 +13,8 @@ COPY server/go.mod server/go.sum ./
 RUN go mod download
 COPY server/ ./
 COPY --from=web /web/dist/ internal/webui/dist/
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /cupstream ./cmd/cupstream
+ARG VERSION=dev
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /cupstream ./cmd/cupstream
 
 FROM alpine:3.24
 RUN apk add --no-cache ca-certificates && adduser -D -H -u 10001 cupstream \
