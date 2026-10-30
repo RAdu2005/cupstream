@@ -6,7 +6,6 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
-	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -81,7 +80,7 @@ func (h *Hub) sendChat(ctx context.Context, c *conn, m api.ClientMessage) {
 		return
 	}
 	now := h.now()
-	if !h.chatLimit.allow(c.userID, now) {
+	if !h.chatLimit.Allow(c.userID, now) {
 		c.send(api.RealtimeError{Type: "error", Room: m.Room, Ref: m.Ref, Code: "rate_limited", Error: "you are sending messages too quickly"})
 		return
 	}
@@ -174,59 +173,5 @@ func (h *Hub) deleteExpiredChat(ctx context.Context) {
 		slog.WarnContext(ctx, "deleting expired chat failed", "err", err)
 	case n > 0:
 		slog.DebugContext(ctx, "deleted expired chat", "count", n)
-	}
-}
-
-// limiter is a token bucket per key: burst actions at once, then one more
-// every refill.
-type limiter struct {
-	burst  float64
-	refill time.Duration
-
-	mu      sync.Mutex
-	buckets map[string]*bucket
-}
-
-type bucket struct {
-	tokens float64
-	at     time.Time
-}
-
-func newLimiter(burst int, refill time.Duration) *limiter {
-	return &limiter{burst: float64(burst), refill: refill, buckets: map[string]*bucket{}}
-}
-
-func (l *limiter) fill(b *bucket, now time.Time) {
-	if now.After(b.at) {
-		b.tokens = min(l.burst, b.tokens+float64(now.Sub(b.at))/float64(l.refill))
-		b.at = now
-	}
-}
-
-// allow reports whether key may act now, and counts it if so.
-func (l *limiter) allow(key string, now time.Time) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	b := l.buckets[key]
-	if b == nil {
-		b = &bucket{tokens: l.burst, at: now}
-		l.buckets[key] = b
-	}
-	l.fill(b, now)
-	if b.tokens < 1 {
-		return false
-	}
-	b.tokens--
-	return true
-}
-
-// prune forgets keys whose bucket has filled up again.
-func (l *limiter) prune(now time.Time) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	for k, b := range l.buckets {
-		if l.fill(b, now); b.tokens >= l.burst {
-			delete(l.buckets, k)
-		}
 	}
 }

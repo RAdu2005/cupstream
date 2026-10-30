@@ -14,6 +14,7 @@ import (
 	"github.com/RAdu2005/cupstream/server/internal/api"
 	"github.com/RAdu2005/cupstream/server/internal/auth"
 	"github.com/RAdu2005/cupstream/server/internal/gateway"
+	"github.com/RAdu2005/cupstream/server/internal/ratelimit"
 	"github.com/RAdu2005/cupstream/server/internal/view"
 )
 
@@ -140,7 +141,7 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request) {
 	}()
 	go c.pingLoop(ctx)
 
-	flood := newLimiter(floodBurst, floodRefill)
+	flood := ratelimit.New(floodBurst, floodRefill)
 	for {
 		typ, data, err := ws.Read(ctx)
 		if err != nil {
@@ -150,7 +151,7 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request) {
 			c.kill(websocket.StatusUnsupportedData, "messages are JSON text")
 			break
 		}
-		if !flood.allow("", h.now()) {
+		if !flood.Allow("", h.now()) {
 			c.kill(statusTooSlow, "too many messages")
 			break
 		}

@@ -11,38 +11,6 @@ import (
 	"github.com/RAdu2005/cupstream/server/internal/store"
 )
 
-func TestLimiter(t *testing.T) {
-	l := newLimiter(3, time.Second)
-	now := time.Unix(1000, 0)
-	for i := range 3 {
-		if !l.allow("bob", now) {
-			t.Fatalf("message %d refused", i+1)
-		}
-	}
-	if l.allow("bob", now) {
-		t.Fatal("fourth message at once allowed")
-	}
-	if !l.allow("alice", now) {
-		t.Fatal("limits are per user")
-	}
-	if l.allow("bob", now.Add(900*time.Millisecond)) {
-		t.Fatal("allowed before a refill")
-	}
-	if !l.allow("bob", now.Add(1900*time.Millisecond)) || l.allow("bob", now.Add(1900*time.Millisecond)) {
-		t.Fatal("one message per refill")
-	}
-
-	// Idle users are forgotten once their bucket is full again.
-	l.prune(now.Add(2 * time.Second))
-	if _, ok := l.buckets["bob"]; !ok || len(l.buckets) != 1 {
-		t.Fatalf("buckets %v: only bob's is still not full", l.buckets)
-	}
-	l.prune(now.Add(time.Minute))
-	if len(l.buckets) != 0 {
-		t.Fatalf("%d buckets after a minute", len(l.buckets))
-	}
-}
-
 func TestCleanChatBody(t *testing.T) {
 	long := ""
 	for range maxChatBody {
