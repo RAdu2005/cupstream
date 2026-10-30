@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/RAdu2005/cupstream/server/internal/auth"
+	"github.com/RAdu2005/cupstream/server/internal/capacity"
 	"github.com/RAdu2005/cupstream/server/internal/config"
 	"github.com/RAdu2005/cupstream/server/internal/friends"
 	"github.com/RAdu2005/cupstream/server/internal/gateway"
@@ -90,6 +91,15 @@ func run() error {
 
 	roomService := rooms.New(db)
 	gw := gateway.New(db, media, roomService, cfg.PublicURL)
+	if cfg.EgressLimit > 0 {
+		if meter, err := capacity.New(cfg.EgressInterfaces, cfg.EgressLimit); err != nil {
+			slog.Warn("cannot measure outgoing traffic; viewers are not limited", "err", err)
+		} else {
+			slog.Info("refusing viewers above the bandwidth limit", "interfaces", meter.Usage().Interfaces, "limit_mbps", cfg.EgressLimit/1e6)
+			go meter.Run(ctx)
+			gw.Admission = meter
+		}
+	}
 	hub := realtime.New(db, roomService, gw, cfg)
 	gw.OnRoomIdle = hub.RoomIdle
 	go func() {

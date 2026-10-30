@@ -72,6 +72,10 @@ The server reads `CUPSTREAM_*` environment variables; see [.env.example](.env.ex
 
 Requests are rate-limited per client address (behind the tunnel, the visitor's address from `CUPSTREAM_CLIENT_IP_HEADER`; for IPv6, per /64): signing in, going live, opening viewer sessions, opening the WebSocket and every other change through the API each have their own limit, and the limits are in `server/internal/httpapi/ratelimit.go`. Media session requests (`/api/media/...`) need the session's secret and are not limited. A refused request gets 429 with `Retry-After` and the code `rate_limited`. MediaMTX's HTTP API and WHIP/WHEP listener are bound to `127.0.0.1`: only the CupStream server talks to them, and media flows on port 8189 (UDP, with TCP fallback).
 
+### Capacity
+
+The server's network connection is the limit: 1 Gbps carries about 125 viewers of an 8 Mbps stream. The server reads the outgoing traffic of the physical network interfaces every second (from `/sys/class/net`, since the service cannot see `/proc/net`), and while a new viewer would take it above `CUPSTREAM_EGRESS_LIMIT_MBPS` (800 by default) it refuses them with 503 and the code `server_full`: opening a session that plays at once, and resuming the video of a paused one. Pre-warming (opening paused) is always allowed. An admitted viewer counts with their stream's bitrate (8 Mbps when not known yet) until the counters show it, so a burst of viewers cannot all slip in at once. The startup log says which interfaces are measured.
+
 ## MediaMTX build
 
 MediaMTX runs from the fork [RAdu2005/mediamtx](https://github.com/RAdu2005/mediamtx): an upstream release plus the WHEP pause/resume pull request [bluenviron/mediamtx#6308](https://github.com/bluenviron/mediamtx/pull/6308) and our changes (overview, section 3.2). The tag is pinned in `deploy/mediamtx/Dockerfile` and `compose.yaml`; the fork's `CUPSTREAM.md` describes how to upgrade.

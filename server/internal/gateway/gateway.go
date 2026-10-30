@@ -160,6 +160,10 @@ type Gateway struct {
 	// OnRoomIdle, if set, is called after the last active stream of a room
 	// ended. Set it before Run.
 	OnRoomIdle func(ctx context.Context, roomID string)
+
+	// Admission, when set, refuses viewers near the bandwidth limit (see
+	// admission.go). Set it before serving.
+	Admission Admission
 }
 
 func New(db *store.DB, mtx *mediamtx.Client, rs *rooms.Service, publicURL *url.URL) *Gateway {

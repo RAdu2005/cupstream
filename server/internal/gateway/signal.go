@@ -216,6 +216,10 @@ func (g *Gateway) forwardOffer(w http.ResponseWriter, r *http.Request, rec store
 			writeErr(w, http.StatusConflict, CodeTooManyStreams, errTooManyStreams.Error())
 			return false
 		}
+		if !p && !g.admit(rec.ID) {
+			writeServerFull(w)
+			return false
+		}
 		if p {
 			if !g.Features().Pause {
 				writeErr(w, http.StatusNotImplemented, "pause_unsupported", errPauseUnsupported.Error())
