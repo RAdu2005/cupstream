@@ -85,3 +85,20 @@ test('a streamer who left voice sees a countdown', async () => {
   act(() => ws.receive({ type: 'streamGrace', roomSlug: 'abc', streamId: 's1', endsInMs: 0 }));
   expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 });
+
+test('viewers are told where a moved stream went', async () => {
+  const alice = { id: 'u1', handle: 'alice', displayName: 'Alice' };
+  setup([
+    json(200, {
+      ...discordRoom,
+      streams: [{ id: 's1', user: alice, source: 'web', state: 'starting', startedAt: 1, viewers: 0, bitrate: 0, lossRatio: 0 }],
+    }),
+  ]);
+  await screen.findByText('Alice');
+  await waitFor(() => expect(FakeWebSocket.instances.length).toBeGreaterThan(0));
+  const ws = FakeWebSocket.last;
+  act(() => ws.open());
+  act(() => ws.receive({ type: 'streamMoved', room: 'abc', streamId: 's1', toRoom: 'mine' }));
+  expect(screen.getByRole('status')).toHaveTextContent('Alice moved their stream to their own room.');
+  expect(screen.getByRole('link', { name: 'Follow it' })).toHaveAttribute('href', '/r/mine');
+});

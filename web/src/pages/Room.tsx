@@ -11,6 +11,7 @@ import { MemberActions } from '@/components/MemberActions';
 import { DiscordChat } from '@/components/discord/DiscordChat';
 import { DiscordJoinPrompt, discordRefusals } from '@/components/discord/DiscordJoinPrompt';
 import { DiscordRoomHeading } from '@/components/discord/DiscordRoomHeading';
+import { StreamMovedNotice } from '@/components/discord/StreamMovedNotice';
 import { PresenceList } from '@/components/PresenceList';
 import { RoomStreams } from '@/components/RoomStreams';
 import { Button, Card } from '@/components/ui';
@@ -54,6 +55,7 @@ export function Room() {
         </div>
       </header>
 
+      {data.kind === 'discord' && <StreamMovedNotice slug={data.slug} streams={data.streams} />}
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
         <RoomStreams key={data.slug} room={data} viewerStats={live.viewerStats} />
         <aside className="flex flex-col gap-4">

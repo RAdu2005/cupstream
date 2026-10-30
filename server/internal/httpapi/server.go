@@ -120,6 +120,8 @@ func (s *Server) Handler() http.Handler {
 
 	// Discord rooms.
 	mux.Handle("GET /api/rooms/{slug}/discord", requireUser(s.roomDiscord))
+	mux.Handle("GET /api/streams/{id}/viewers", requireUser(s.streamViewers))
+	mux.Handle("POST /api/streams/{id}/move", requireUser(s.moveStream))
 
 	// Media signaling.
 	mux.HandleFunc("POST /whip", s.Gateway.HandleOBSPublish)

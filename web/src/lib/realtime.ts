@@ -12,6 +12,7 @@ import type {
   StreamEnded,
   StreamEvent,
   StreamGrace,
+  StreamMoved,
   Subscribed,
   ViewerStats,
 } from '@/api/types.gen';
@@ -30,7 +31,8 @@ export type ServerMessage =
   | RealtimeError
   | Notification
   | FriendsChanged
-  | StreamGrace;
+  | StreamGrace
+  | StreamMoved;
 
 export type Status = 'connecting' | 'open' | 'closed';
 

@@ -20,6 +20,7 @@ import {
 } from '@/lib/roomView';
 import { useBandwidth } from '@/lib/useBandwidth';
 import { Dialog } from './Dialog';
+import { MoveStreamButton } from './discord/MoveStreamDialog';
 import { Player } from './Player';
 import { StreamCard } from './StreamCard';
 import { Button, Card } from './ui';
@@ -298,6 +299,7 @@ function StreamInfo({ stream, room, viewerStats }: { stream: Stream; room: Room;
           <span className="flex items-center gap-1" title="Viewers">
             <Users className="size-3.5" aria-hidden /> {stream.viewers}
           </span>
+          {room.kind === 'discord' && own && <MoveStreamButton streamId={stream.id} />}
           {canEnd && (
             <Button
               variant="ghost"

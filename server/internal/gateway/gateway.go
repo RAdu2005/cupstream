@@ -813,6 +813,45 @@ func (g *Gateway) Stream(streamID string) (LiveStream, bool) {
 	return g.snapshotLocked(streamID, s, g.viewerCountsLocked()), true
 }
 
+// MoveStream moves a live stream into another room. Its media path stays
+// the same, so nobody's video is interrupted; the caller applies the new
+// room's access rules (Reevaluate).
+func (g *Gateway) MoveStream(ctx context.Context, streamID string, to store.Room) error {
+	if err := g.db.MoveStream(ctx, store.MoveStreamParams{RoomID: to.ID, ID: streamID}); err != nil {
+		return err
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	s, ok := g.streams[streamID]
+	if !ok {
+		return errStreamGone
+	}
+	s.rec.RoomID = to.ID
+	g.changed()
+	return nil
+}
+
+// Viewers lists the signed-in people with a session on a stream, other than
+// its streamer and viewers held for lack of access.
+func (g *Gateway) Viewers(streamID string) []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	s, ok := g.streams[streamID]
+	if !ok {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, sess := range g.sessions {
+		if sess.streamID == streamID && !sess.publish && !sess.held && sess.userID != "" && sess.userID != s.rec.UserID && !seen[sess.userID] {
+			seen[sess.userID] = true
+			out = append(out, sess.userID)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
 // UserStream returns the active stream of userID, if they are live.
 func (g *Gateway) UserStream(userID string) (LiveStream, bool) {
 	rec := g.activeStreamOf(userID)

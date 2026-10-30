@@ -35,6 +35,35 @@ func (q *Queries) CreateDiscordRoom(ctx context.Context, arg CreateDiscordRoomPa
 	return err
 }
 
+const createStreamPass = `-- name: CreateStreamPass :exec
+INSERT INTO room_passes (room_id, user_id, stream_id, created_at)
+VALUES (?1, ?2, ?3, ?4)
+ON CONFLICT (room_id, user_id) DO UPDATE SET
+    stream_id = excluded.stream_id, invite_id = NULL, can_stream = 0, expires_at = NULL, created_at = excluded.created_at
+WHERE (room_passes.expires_at IS NOT NULL AND room_passes.expires_at <= excluded.created_at)
+   OR room_passes.invite_id IN (SELECT id FROM invites WHERE revoked_at IS NOT NULL)
+   OR room_passes.stream_id IN (SELECT id FROM streams WHERE ended_at IS NOT NULL)
+`
+
+type CreateStreamPassParams struct {
+	RoomID   string
+	UserID   string
+	StreamID sql.NullString
+	Now      int64
+}
+
+// A pass until a moved stream ends. It replaces a pass that is no longer
+// valid, but not one that is.
+func (q *Queries) CreateStreamPass(ctx context.Context, arg CreateStreamPassParams) error {
+	_, err := q.db.ExecContext(ctx, createStreamPass,
+		arg.RoomID,
+		arg.UserID,
+		arg.StreamID,
+		arg.Now,
+	)
+	return err
+}
+
 const ensureDiscordGuild = `-- name: EnsureDiscordGuild :exec
 INSERT INTO discord_guilds (guild_id, created_at) VALUES (?, ?) ON CONFLICT DO NOTHING
 `
@@ -277,6 +306,20 @@ func (q *Queries) ListLiveDiscordStreamers(ctx context.Context) ([]ListLiveDisco
 		return nil, err
 	}
 	return items, nil
+}
+
+const moveStream = `-- name: MoveStream :exec
+UPDATE streams SET room_id = ? WHERE id = ? AND ended_at IS NULL
+`
+
+type MoveStreamParams struct {
+	RoomID string
+	ID     string
+}
+
+func (q *Queries) MoveStream(ctx context.Context, arg MoveStreamParams) error {
+	_, err := q.db.ExecContext(ctx, moveStream, arg.RoomID, arg.ID)
+	return err
 }
 
 const updateDiscordGuild = `-- name: UpdateDiscordGuild :exec

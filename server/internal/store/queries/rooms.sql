@@ -40,7 +40,10 @@ FROM room_passes
 LEFT JOIN invites ON invites.id = room_passes.invite_id
 WHERE room_passes.room_id = sqlc.arg(room_id) AND room_passes.user_id = sqlc.arg(user_id)
   AND (room_passes.expires_at IS NULL OR room_passes.expires_at > CAST(sqlc.arg(now) AS INTEGER))
-  AND (invites.id IS NULL OR invites.revoked_at IS NULL);
+  AND (invites.id IS NULL OR invites.revoked_at IS NULL)
+  AND (room_passes.stream_id IS NULL OR EXISTS (
+      SELECT 1 FROM streams WHERE streams.id = room_passes.stream_id AND streams.ended_at IS NULL
+  ));
 
 -- name: IsBanned :one
 SELECT EXISTS (SELECT 1 FROM room_bans WHERE room_id = ? AND user_id = ?);
