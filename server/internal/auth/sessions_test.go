@@ -29,7 +29,7 @@ func TestSessionLifecycle(t *testing.T) {
 	s.now = func() time.Time { return now }
 
 	rec := httptest.NewRecorder()
-	if err := s.Start(ctx, rec, user.ID, KindWeb, ""); err != nil {
+	if err := s.Start(ctx, rec, user.ID); err != nil {
 		t.Fatal(err)
 	}
 	cookie := rec.Result().Cookies()[0]
@@ -85,7 +85,7 @@ func TestListAndRevoke(t *testing.T) {
 
 	s := NewSessions(db, false)
 	for range 2 {
-		if err := s.Start(ctx, httptest.NewRecorder(), alice.ID, KindWeb, ""); err != nil {
+		if err := s.Start(ctx, httptest.NewRecorder(), alice.ID); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -114,5 +114,87 @@ func TestNormalizeHandle(t *testing.T) {
 		if _, err := NormalizeHandle(in); err == nil {
 			t.Errorf("NormalizeHandle(%q) should fail", in)
 		}
+	}
+}
+
+func TestAppSession(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	user, _, err := NewAccounts(db, nil).SignIn(ctx, oauth.Identity{Provider: ProviderDev, Subject: "alice", Username: "alice", DisplayName: "Alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := NewSessions(db, true)
+	token, err := s.StartApp(ctx, user.ID, "Alice's PC")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	if err := s.Start(ctx, rec, user.ID); err != nil {
+		t.Fatal(err)
+	}
+	webToken := rec.Result().Cookies()[0].Value
+
+	whoami := func(path string, edit func(*http.Request)) (Current, bool) {
+		var got Current
+		var ok bool
+		req := httptest.NewRequest("GET", path, nil)
+		edit(req)
+		s.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			got, ok = FromContext(r.Context())
+		})).ServeHTTP(httptest.NewRecorder(), req)
+		return got, ok
+	}
+	withBearer := func(tok string) func(*http.Request) {
+		return func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+tok) }
+	}
+	withCookie := func(tok string) func(*http.Request) {
+		return func(r *http.Request) { r.AddCookie(&http.Cookie{Name: "__Host-cupstream_session", Value: tok}) }
+	}
+
+	if cur, ok := whoami("/api/me", withBearer(token)); !ok || cur.User.ID != user.ID || cur.Kind != KindApp {
+		t.Fatalf("app token not resolved: %+v %v", cur, ok)
+	}
+	// Each kind of token only works the way it is sent, and Bearer tokens
+	// only on the API (elsewhere they are OBS stream keys).
+	for name, edit := range map[string]func(*http.Request){
+		"app token as cookie":   withCookie(token),
+		"web token as bearer":   withBearer(webToken),
+		"unknown bearer":        withBearer("nope"),
+		"bearer scheme missing": func(r *http.Request) { r.Header.Set("Authorization", token) },
+	} {
+		if _, ok := whoami("/api/me", edit); ok {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	if _, ok := whoami("/whip", withBearer(token)); ok {
+		t.Error("app token accepted outside /api/")
+	}
+
+	list, err := s.List(ctx, user.ID)
+	if err != nil || len(list) != 2 {
+		t.Fatalf("sessions = %v, %v", list, err)
+	}
+	for _, se := range list {
+		if se.Kind == string(KindApp) && se.DeviceName != "Alice's PC" {
+			t.Fatalf("device name = %q", se.DeviceName)
+		}
+	}
+
+	// Signing out with the token ends only the app session.
+	req := httptest.NewRequest("POST", "/api/auth/logout", nil)
+	withBearer(token)(req)
+	if err := s.End(ctx, httptest.NewRecorder(), req); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := whoami("/api/me", withBearer(token)); ok {
+		t.Fatal("app session still valid after sign-out")
+	}
+	if _, ok := whoami("/api/me", withCookie(webToken)); !ok {
+		t.Fatal("web session ended too")
 	}
 }

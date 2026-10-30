@@ -32,6 +32,7 @@ type Deps struct {
 	Sealer    *seal.Sealer
 	Sessions  *auth.Sessions
 	Accounts  *auth.Accounts
+	AppCodes  *auth.AppCodes
 	Discord   *auth.DiscordSync // nil without Discord sign-in
 	Providers map[string]oauth.Provider
 	Rooms     *rooms.Service
@@ -59,6 +60,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/auth/{provider}/start", s.oauthStart)
 	mux.HandleFunc("GET /api/auth/{provider}/callback", s.oauthCallback)
 	mux.Handle("GET /api/me", requireUser(s.me))
+	mux.Handle("POST /api/app/authorize", requireUser(s.appAuthorize))
+	mux.HandleFunc("POST /api/app/token", s.appToken)
 
 	// Account settings.
 	mux.Handle("GET /api/account", requireUser(s.account))

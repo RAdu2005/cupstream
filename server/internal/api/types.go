@@ -27,6 +27,38 @@ type DevLoginRequest struct {
 	Handle string `json:"handle"`
 }
 
+// AppAuthorizeRequest is the body of POST /api/app/authorize: the signed-in
+// user approves the desktop app's sign-in request, whose parameters the app
+// put in the /app/authorize page's query string.
+type AppAuthorizeRequest struct {
+	RedirectURI         string `json:"redirectUri"` // the app's loopback address
+	State               string `json:"state"`
+	CodeChallenge       string `json:"codeChallenge"`
+	CodeChallengeMethod string `json:"codeChallengeMethod" tstype:"'S256'"`
+	DeviceName          string `json:"deviceName"`
+}
+
+// AppAuthorizeResponse tells the page where to send the browser: the app's
+// redirect URI with a one-time code and the state.
+type AppAuthorizeResponse struct {
+	Redirect string `json:"redirect"`
+}
+
+// AppTokenRequest is the body of POST /api/app/token, sent by the desktop
+// app to exchange its code.
+type AppTokenRequest struct {
+	Code         string `json:"code"`
+	CodeVerifier string `json:"codeVerifier"`
+	RedirectURI  string `json:"redirectUri"`
+}
+
+// AppToken is the desktop app's session: it sends the token as a Bearer
+// token on /api/ requests, and the user can revoke it in their settings.
+type AppToken struct {
+	Token string `json:"token"`
+	User  User   `json:"user"`
+}
+
 // Health is the response of GET /healthz.
 type Health struct {
 	Status   string         `json:"status" tstype:"'ok' | 'degraded'"`
