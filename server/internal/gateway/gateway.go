@@ -94,6 +94,8 @@ type liveStream struct {
 	peak  int
 	stats streamStats
 	thumb *Thumbnail
+	// The sender's bitrate target (app and web streams).
+	bitrate bitrateControl
 }
 
 type session struct {

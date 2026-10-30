@@ -315,7 +315,8 @@ func (h *Hub) syncRoomLocked(ctx context.Context, rs *roomSubs, users *view.User
 }
 
 // sendViewerStatsLocked sends streamers who are in their room a summary of
-// what their viewers receive.
+// what their viewers receive and, to app and web senders, their bitrate
+// target.
 func (h *Hub) sendViewerStatsLocked(rs *roomSubs) {
 	for _, st := range rs.streams {
 		var streamer []*conn
@@ -341,6 +342,15 @@ func (h *Hub) sendViewerStatsLocked(rs *roomSubs) {
 		b := marshal(out)
 		for _, c := range streamer {
 			c.enqueue(b)
+		}
+		if t, ok := h.gw.BitrateTarget(st.ID); ok {
+			b := marshal(api.BitrateTarget{
+				Type: "bitrateTarget", Room: rs.room.Slug, StreamID: st.ID,
+				MaxBitrate: t.Bitrate, Viewers: t.Viewers, Congested: t.Congested,
+			})
+			for _, c := range streamer {
+				c.enqueue(b)
+			}
 		}
 	}
 }
