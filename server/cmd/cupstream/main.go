@@ -89,12 +89,13 @@ func run() error {
 
 	roomService := rooms.New(db)
 	gw := gateway.New(db, media, roomService, cfg.PublicURL)
+	hub := realtime.New(db, roomService, gw, cfg)
+	gw.OnRoomIdle = hub.RoomIdle
 	go func() {
 		if err := gw.Run(ctx); err != nil {
 			slog.Error("media gateway stopped", "err", err)
 		}
 	}()
-	hub := realtime.New(db, roomService, gw, cfg)
 	hubDone := make(chan struct{})
 	go func() {
 		defer close(hubDone)

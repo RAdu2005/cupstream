@@ -84,6 +84,12 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/rooms/{slug}/allowed", requireUser(s.listAllowed))
 	mux.Handle("PUT /api/rooms/{slug}/allowed/{handle}", requireUser(s.setAllowed))
 	mux.Handle("DELETE /api/rooms/{slug}/allowed/{handle}", requireUser(s.removeAllowed))
+	mux.Handle("GET /api/rooms/{slug}/invites", requireUser(s.listInvites))
+	mux.Handle("POST /api/rooms/{slug}/invites", requireUser(s.createInvite))
+	mux.Handle("DELETE /api/rooms/{slug}/invites/{id}", requireUser(s.revokeInvite))
+	// Invite tokens travel in the body, so they stay out of request logs.
+	mux.HandleFunc("POST /api/invites/preview", s.previewInvite)
+	mux.Handle("POST /api/invites/redeem", requireUser(s.redeemInvite))
 	mux.Handle("POST /api/streams", requireUser(s.startStream))
 	mux.Handle("DELETE /api/streams/{id}", requireUser(s.endStream))
 

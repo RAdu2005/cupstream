@@ -394,9 +394,29 @@ func (h *Hub) reevaluate(ctx context.Context, room store.Room, changed bool) {
 	}
 }
 
-// RecheckAll checks every subscription again, for access that ends by
-// itself (temporary passes) or rooms that were deleted. Run does it every
-// minute.
+// RoomIdle ends the room's invite links that last until the stream ends,
+// once its last stream ended, and removes the people who joined through
+// them. The gateway calls it (OnRoomIdle).
+func (h *Hub) RoomIdle(ctx context.Context, roomID string) {
+	ended, err := h.rooms.EndStreamInvites(ctx, roomID)
+	if err != nil {
+		slog.ErrorContext(ctx, "ending invite links failed", "room", roomID, "err", err)
+		return
+	}
+	if !ended {
+		return
+	}
+	room, err := h.db.GetRoom(ctx, roomID)
+	if err != nil {
+		slog.ErrorContext(ctx, "loading a room failed", "room", roomID, "err", err)
+		return
+	}
+	h.Reevaluate(ctx, room)
+}
+
+// RecheckAll checks every subscription again, and the media sessions in
+// those rooms, for access that ends by itself (temporary passes) or rooms
+// that were deleted. Run does it every minute.
 func (h *Hub) RecheckAll(ctx context.Context) {
 	h.mu.Lock()
 	ids := make([]string, 0, len(h.subs))
@@ -416,6 +436,8 @@ func (h *Hub) RecheckAll(ctx context.Context) {
 			continue
 		}
 		h.reevaluate(ctx, room, false)
+		// Passes that expired also end their media.
+		h.gw.Reevaluate(ctx, room)
 	}
 }
 

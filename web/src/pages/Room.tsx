@@ -7,6 +7,7 @@ import { useRoomRealtime } from '@/api/realtime';
 import { useEndStream, useRoom } from '@/api/rooms';
 import type { Room as RoomData, Stream, ViewerStats } from '@/api/types.gen';
 import { ChatPanel } from '@/components/ChatPanel';
+import { ManageRoom } from '@/components/ManageRoom';
 import { Player } from '@/components/Player';
 import { PresenceList } from '@/components/PresenceList';
 import { Button, Card } from '@/components/ui';
@@ -40,6 +41,7 @@ export function Room() {
             </span>
           )}
           {data.permissions.stream && <ObsHint slug={data.slug} />}
+          {data.kind === 'link' && me && data.owner?.id === me.id && <ManageRoom slug={data.slug} />}
         </div>
       </header>
 
