@@ -81,6 +81,7 @@ func newTestEnv(t *testing.T, o envOptions) *testEnv {
 	deps.Gateway = e.gw
 	e.hub = realtime.New(db, rs, e.gw, cfg)
 	e.hub.TabGrace = 50 * time.Millisecond
+	e.gw.OnRoomIdle = e.hub.RoomIdle
 	deps.Realtime = e.hub
 	ctx, cancel := context.WithCancel(ctx)
 	hubDone := make(chan struct{})

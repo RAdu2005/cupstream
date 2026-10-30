@@ -212,6 +212,58 @@ export interface SetAllowedRequest {
   canStream: boolean;
 }
 /**
+ * Invite is an invite link to a link room. The link itself is only shown
+ * once, when it is created. Times are Unix seconds.
+ */
+export interface Invite {
+  id: string;
+  canStream: boolean;
+  /**
+   * ExpiresAt is when the link stops working; links without it work until
+   * revoked, or until the room's streams end (UntilStreamEnd).
+   */
+  expiresAt?: number /* int64 */;
+  untilStreamEnd: boolean;
+  maxUses?: number /* int64 */; // 0: no limit
+  uses: number /* int64 */;
+  createdAt: number /* int64 */;
+}
+/**
+ * CreateInviteRequest is the body of POST /api/rooms/{slug}/invites.
+ * "stream" lasts until the room has no live stream left.
+ */
+export interface CreateInviteRequest {
+  expiry: '1h' | '24h' | 'stream' | 'never';
+  maxUses?: number /* int64 */;
+  canStream: boolean;
+}
+export interface NewInvite {
+  invite: Invite;
+  url: string;
+}
+/**
+ * InviteToken is the body of POST /api/invites/preview and .../redeem: the
+ * token from an invite link (/i/<token>).
+ */
+export interface InviteToken {
+  token: string;
+}
+/**
+ * InvitePreview is the response of POST /api/invites/preview: where a valid
+ * link leads, so the page can ask the visitor to sign in first.
+ */
+export interface InvitePreview {
+  roomSlug: string;
+  owner: User;
+  canStream: boolean;
+}
+/**
+ * RedeemedInvite is the response of POST /api/invites/redeem.
+ */
+export interface RedeemedInvite {
+  roomSlug: string;
+}
+/**
  * StartStreamRequest is the body of POST /api/streams (app and web senders).
  */
 export interface StartStreamRequest {

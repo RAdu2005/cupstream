@@ -142,6 +142,10 @@ type Gateway struct {
 	// pauseMu serializes pause and resume calls, which read and change a
 	// session's pause state around a MediaMTX request.
 	pauseMu sync.Mutex
+
+	// OnRoomIdle, if set, is called after the last active stream of a room
+	// ended. Set it before Run.
+	OnRoomIdle func(ctx context.Context, roomID string)
 }
 
 func New(db *store.DB, mtx *mediamtx.Client, rs *rooms.Service, publicURL *url.URL) *Gateway {
@@ -518,7 +522,18 @@ func (g *Gateway) EndUserStreams(ctx context.Context, userID, reason string) {
 
 func (g *Gateway) finish(ctx context.Context, e ending) {
 	g.mu.Lock()
+	var roomID string
+	if s := g.streams[e.id]; s != nil {
+		roomID = s.rec.RoomID
+	}
 	delete(g.streams, e.id)
+	// A replaced stream is followed by the user's new one at once.
+	idle := roomID != "" && e.reason != EndReplaced
+	for _, s := range g.streams {
+		if s.rec.RoomID == roomID {
+			idle = false
+		}
+	}
 	var ids []string
 	for id, sess := range g.sessions {
 		if sess.streamID == e.id {
@@ -543,6 +558,9 @@ func (g *Gateway) finish(ctx context.Context, e ending) {
 		}
 	}
 	slog.Info("stream ended", "stream", e.id, "reason", e.reason)
+	if idle && g.OnRoomIdle != nil {
+		g.OnRoomIdle(ctx, roomID)
+	}
 }
 
 // Reevaluate applies a change to room's access rules: viewers who may no
