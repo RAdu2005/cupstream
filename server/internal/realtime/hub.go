@@ -353,6 +353,9 @@ func (h *Hub) Reevaluate(ctx context.Context, room store.Room) {
 }
 
 func (h *Hub) reevaluate(ctx context.Context, room store.Room, changed bool) {
+	if h.rooms.Stale(room) {
+		return // Discord's view is out of date; the bot checks the room again
+	}
 	h.mu.Lock()
 	rs := h.subs[room.ID]
 	users := map[string]access.Reason{}

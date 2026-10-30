@@ -14,6 +14,7 @@ import (
 
 	"github.com/RAdu2005/cupstream/server/internal/auth"
 	"github.com/RAdu2005/cupstream/server/internal/config"
+	discordbot "github.com/RAdu2005/cupstream/server/internal/discord"
 	"github.com/RAdu2005/cupstream/server/internal/friends"
 	"github.com/RAdu2005/cupstream/server/internal/gateway"
 	"github.com/RAdu2005/cupstream/server/internal/httpapi"
@@ -97,6 +98,19 @@ func run() error {
 			slog.Error("media gateway stopped", "err", err)
 		}
 	}()
+	if cfg.DiscordBotToken != "" {
+		bot := discordbot.New(db, roomService, cfg.DiscordBotToken)
+		bot.Reevaluate = func(ctx context.Context, room store.Room) {
+			gw.Reevaluate(ctx, room)
+			hub.Reevaluate(ctx, room)
+		}
+		roomService.SetVoice(bot)
+		go func() {
+			if err := bot.Run(ctx); err != nil {
+				slog.Error("discord bot stopped", "err", err)
+			}
+		}()
+	}
 	hubDone := make(chan struct{})
 	go func() {
 		defer close(hubDone)

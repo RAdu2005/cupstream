@@ -4,9 +4,13 @@ package rooms
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/RAdu2005/cupstream/server/internal/access"
 	"github.com/RAdu2005/cupstream/server/internal/store"
@@ -15,27 +19,107 @@ import (
 var ErrNotLinkRoom = errors.New("only link rooms have this setting")
 
 type Service struct {
-	db  *store.DB
-	now func() time.Time
+	db    *store.DB
+	now   func() time.Time
+	voice Voice
 }
 
 func New(db *store.DB) *Service { return &Service{db: db, now: time.Now} }
 
+// Voice is the Discord bot's view of voice channels (package discord).
+type Voice interface {
+	// Member reports what the bot knows about a Discord user in a voice
+	// channel.
+	Member(ctx context.Context, guildID, channelID, discordUserID string) VoiceMember
+	// Policy is the server's rule for who may stream in its rooms.
+	Policy(guildID string) access.StreamPolicy
+	// Stale reports whether the bot's view of the server is out of date.
+	Stale(guildID string) bool
+}
+
+// VoiceMember is a Discord user as the bot sees them in one voice channel.
+type VoiceMember struct {
+	// InChannel: in the channel, or left it within the viewers' delay.
+	InChannel bool
+	// InChannelToStream: in the channel, or left it within the streamers'
+	// grace period.
+	InChannelToStream bool
+	// Discord permissions in the channel. CanVideo includes the streamers'
+	// grace period after losing it.
+	CanVideo, CanMoveMembers, CanManageMessages bool
+	// Stale: the bot is reconnecting, so this is what it saw last.
+	Stale bool
+}
+
+// SetVoice connects the Discord bot. Without it, nobody is in voice.
+func (s *Service) SetVoice(v Voice) { s.voice = v }
+
 // AccessRoom converts a stored room for the access package.
-func AccessRoom(r store.Room) access.Room {
+func (s *Service) AccessRoom(r store.Room) access.Room {
 	if r.Kind == string(access.Discord) {
-		// TODO(phase 6): the server's stream policy from discord_guilds.
-		return access.Room{Kind: access.Discord, Policy: access.VideoPermission}
+		policy := access.VideoPermission
+		if s.voice != nil {
+			policy = s.voice.Policy(r.GuildID.String)
+		}
+		return access.Room{Kind: access.Discord, Policy: policy}
 	}
 	return access.Room{Kind: access.Link, OwnerID: r.OwnerID.String, Visibility: access.Visibility(r.Visibility.String)}
+}
+
+// Stale reports whether access to room cannot be told reliably right now:
+// it is a Discord room and the bot is reconnecting. Nobody is paused,
+// disconnected or ended because of access while it is.
+func (s *Service) Stale(room store.Room) bool {
+	return room.Kind == string(access.Discord) && s.voice != nil && s.voice.Stale(room.GuildID.String)
+}
+
+// DiscordRoom returns the room of a voice channel, creating it on first use.
+func (s *Service) DiscordRoom(ctx context.Context, guildID, channelID string) (store.Room, error) {
+	key := store.GetDiscordRoomParams{GuildID: nullString(guildID), ChannelID: nullString(channelID)}
+	room, err := s.db.GetDiscordRoom(ctx, key)
+	if !errors.Is(err, sql.ErrNoRows) {
+		return room, err
+	}
+	b := make([]byte, 5)
+	rand.Read(b)
+	if err := s.db.CreateDiscordRoom(ctx, store.CreateDiscordRoomParams{
+		ID: uuid.Must(uuid.NewV7()).String(), Slug: hex.EncodeToString(b),
+		GuildID: key.GuildID, ChannelID: key.ChannelID, CreatedAt: s.now().Unix(),
+	}); err != nil {
+		return room, err
+	}
+	return s.db.GetDiscordRoom(ctx, key)
+}
+
+func nullString(s string) sql.NullString { return sql.NullString{String: s, Valid: true} }
+
+// discordSubject fills in a Discord room's facts from the bot's voice state.
+func (s *Service) discordSubject(ctx context.Context, room store.Room, sub access.Subject) (access.Subject, error) {
+	ident, err := s.db.GetDiscordIdentity(ctx, sub.UserID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return sub, nil
+	}
+	if err != nil {
+		return sub, err
+	}
+	sub.DiscordLinked = true
+	if s.voice == nil {
+		return sub, nil
+	}
+	m := s.voice.Member(ctx, room.GuildID.String, room.ChannelID.String, ident.Subject)
+	sub.InVoiceChannel, sub.InVoiceToStream, sub.VoiceStale = m.InChannel, m.InChannelToStream, m.Stale
+	sub.CanVideo, sub.CanMoveMembers, sub.CanManageMessages = m.CanVideo, m.CanMoveMembers, m.CanManageMessages
+	return sub, nil
 }
 
 // Subject gathers what access checks need to know about userID ("" for
 // anonymous visitors) in room.
 func (s *Service) Subject(ctx context.Context, room store.Room, userID string) (access.Subject, error) {
 	sub := access.Subject{UserID: userID}
+	if userID != "" && room.Kind == string(access.Discord) {
+		return s.discordSubject(ctx, room, sub)
+	}
 	if userID == "" || room.Kind != string(access.Link) {
-		// TODO(phase 6): Discord rooms read the bot's voice state.
 		return sub, nil
 	}
 	banned, err := s.db.IsBanned(ctx, store.IsBannedParams{RoomID: room.ID, UserID: userID})
@@ -68,7 +152,7 @@ func (s *Service) Check(ctx context.Context, room store.Room, userID string, act
 	if err != nil {
 		return access.NotAllowed, err
 	}
-	return access.Check(AccessRoom(room), sub, action), nil
+	return access.Check(s.AccessRoom(room), sub, action), nil
 }
 
 // Permissions is what userID may do in room.
@@ -81,7 +165,7 @@ func (s *Service) Permissions(ctx context.Context, room store.Room, userID strin
 	if err != nil {
 		return Permissions{}, err
 	}
-	ar := AccessRoom(room)
+	ar := s.AccessRoom(room)
 	return Permissions{
 		Watch:           access.Check(ar, sub, access.Watch),
 		Stream:          access.Check(ar, sub, access.Stream),

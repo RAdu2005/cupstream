@@ -29,6 +29,9 @@ func TestCheck(t *testing.T) {
 	mover := Subject{UserID: "u", DiscordLinked: true, InVoiceChannel: true, CanMoveMembers: true}
 	msgMod := Subject{UserID: "u", DiscordLinked: true, InVoiceChannel: true, CanManageMessages: true}
 	modNotInVoice := Subject{UserID: "u", DiscordLinked: true, CanMoveMembers: true, CanManageMessages: true, CanVideo: true}
+	leftStreamer := Subject{UserID: "u", DiscordLinked: true, InVoiceToStream: true, CanVideo: true}
+	stale := Subject{UserID: "u", DiscordLinked: true, VoiceStale: true}
+	staleInVoice := Subject{UserID: "u", DiscordLinked: true, InVoiceChannel: true, VoiceStale: true}
 
 	cases := []struct {
 		name    string
@@ -89,6 +92,10 @@ func TestCheck(t *testing.T) {
 		{"discord: manage messages cannot end streams", discordVideo, msgMod, ModerateStreams, NotAllowed},
 		{"discord: permissions need voice presence", discordVideo, modNotInVoice, ModerateStreams, JoinVoiceChannel},
 		{"discord: video needs voice presence", discordAnyone, modNotInVoice, Stream, JoinVoiceChannel},
+		{"discord: streamer keeps streaming during the grace period", discordVideo, leftStreamer, Stream, OK},
+		{"discord: streamer's grace period is not for watching", discordVideo, leftStreamer, Watch, JoinVoiceChannel},
+		{"discord: stale voice state cannot tell", discordVideo, stale, Watch, DiscordReconnecting},
+		{"discord: stale voice state keeps who it saw", discordVideo, staleInVoice, Watch, OK},
 		{"discord: link-room facts are ignored", discordVideo, Subject{UserID: "u", Allowed: true, Pass: true}, Watch, DiscordRequired},
 	}
 	for _, tc := range cases {
