@@ -27,6 +27,7 @@ type Session struct {
 	// Counters reported in the session list.
 	InboundBytes, InboundRTPPackets, InboundRTPPacketsLost, OutboundBytes uint64
 	OutboundLossRatio                                                     float64
+	OutboundRTT                                                           float64 // seconds
 }
 
 // Call is a pause or resume request.
@@ -98,6 +99,7 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 				"inboundRTPPacketsLost":       s.InboundRTPPacketsLost,
 				"outboundBytes":               s.OutboundBytes,
 				"outboundRTPPacketsLossRatio": s.OutboundLossRatio,
+				"outboundRoundTripTime":       s.OutboundRTT,
 			})
 		}
 		json.NewEncoder(w).Encode(map[string]any{"items": items})

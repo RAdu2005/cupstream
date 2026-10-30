@@ -379,6 +379,25 @@ type ViewerStats struct {
 	MaxRttMs     float64 `json:"maxRttMs"`
 }
 
+// BitrateTarget asks an app or web sender to send at most MaxBitrate,
+// computed from what its viewers receive. Only the streamer gets it, every
+// two seconds while they are subscribed to their stream's room. Browsers
+// apply it with RTCRtpSender.setParameters and the desktop app through its
+// encoder, each within its own maximum. OBS streams get none.
+type BitrateTarget struct {
+	Type     string `json:"type" tstype:"'bitrateTarget'"`
+	Room     string `json:"room"`
+	StreamID string `json:"streamId"`
+	// MaxBitrate in bits per second for the whole stream (video and audio);
+	// 0 means no limit.
+	MaxBitrate int64 `json:"maxBitrate"`
+	// Viewers taken into account, and how many of them lose packets or
+	// build up delay. Viewers whose own connection is full (all the streams
+	// they watch suffer) are left out.
+	Viewers   int `json:"viewers"`
+	Congested int `json:"congested"`
+}
+
 type ChatEvent struct {
 	Type    string      `json:"type" tstype:"'chat'"`
 	Room    string      `json:"room"`

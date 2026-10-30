@@ -47,6 +47,10 @@ func (s streamStats) public() StreamStats { return s.pub }
 type sessionStats struct {
 	pub ViewerStats
 	out counter
+	// For bitrate control: smoothed packet loss, and the lowest round trip
+	// seen, which growing delay is measured against.
+	loss   float64
+	minRTT time.Duration
 }
 
 func bitrate(prev counter, bytes uint64, now time.Time) int64 {
@@ -93,16 +97,27 @@ func (g *Gateway) applyStatsLocked(paths []mediamtx.Path, sessions []mediamtx.Se
 			s.stats.in = counter{bytes: ms.InboundBytes, packets: ms.InboundRTPPackets, lost: ms.InboundRTPPacketsLost, at: now}
 			continue
 		}
-		sess.stats.pub = ViewerStats{
+		st := &sess.stats
+		first := st.out.at.IsZero()
+		st.pub = ViewerStats{
 			SessionID: sess.mtxID,
 			UserID:    sess.userID,
-			Bitrate:   bitrate(sess.stats.out, ms.OutboundBytes, now),
+			Bitrate:   bitrate(st.out, ms.OutboundBytes, now),
 			LossRatio: ms.OutboundRTPPacketsLossRatio,
 			Jitter:    seconds(ms.OutboundRTPPacketsJitter),
 			RTT:       seconds(ms.OutboundRoundTripTime),
 		}
-		sess.stats.out = counter{bytes: ms.OutboundBytes, at: now}
+		st.out = counter{bytes: ms.OutboundBytes, at: now}
+		if first {
+			st.loss = st.pub.LossRatio
+		} else {
+			st.loss += lossSmoothing * (st.pub.LossRatio - st.loss)
+		}
+		if rtt := st.pub.RTT; rtt > 0 && (st.minRTT == 0 || rtt < st.minRTT) {
+			st.minRTT = rtt
+		}
 	}
+	g.updateTargetsLocked(now)
 }
 
 // RefreshStats updates statistics without changing live state.

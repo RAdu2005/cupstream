@@ -515,6 +515,30 @@ export interface ViewerStats {
   maxJitterMs: number /* float64 */;
   maxRttMs: number /* float64 */;
 }
+/**
+ * BitrateTarget asks an app or web sender to send at most MaxBitrate,
+ * computed from what its viewers receive. Only the streamer gets it, every
+ * two seconds while they are subscribed to their stream's room. Browsers
+ * apply it with RTCRtpSender.setParameters and the desktop app through its
+ * encoder, each within its own maximum. OBS streams get none.
+ */
+export interface BitrateTarget {
+  type: 'bitrateTarget';
+  room: string;
+  streamId: string;
+  /**
+   * MaxBitrate in bits per second for the whole stream (video and audio);
+   * 0 means no limit.
+   */
+  maxBitrate: number /* int64 */;
+  /**
+   * Viewers taken into account, and how many of them lose packets or
+   * build up delay. Viewers whose own connection is full (all the streams
+   * they watch suffer) are left out.
+   */
+  viewers: number /* int */;
+  congested: number /* int */;
+}
 export interface ChatEvent {
   type: 'chat';
   room: string;
