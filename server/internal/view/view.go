@@ -4,6 +4,7 @@ package view
 
 import (
 	"context"
+	"time"
 
 	"github.com/RAdu2005/cupstream/server/internal/api"
 	"github.com/RAdu2005/cupstream/server/internal/gateway"
@@ -42,7 +43,16 @@ func Stream(ctx context.Context, users *Users, ls gateway.LiveStream) (api.Strea
 		StartedAt: ls.Stream.StartedAt, Viewers: ls.Viewers,
 		Bitrate: ls.Stats.Bitrate, LossRatio: ls.Stats.LossRatio,
 		KeyFrameInterval: ls.Stats.KeyFrameInterval.Seconds(),
+		ThumbnailAt:      unixMilli(ls.ThumbnailAt),
 	}, err
+}
+
+// unixMilli is t in Unix milliseconds, or 0 for the zero time.
+func unixMilli(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.UnixMilli()
 }
 
 func ChatMessage(m store.ChatMessage, u store.User) api.ChatMessage {

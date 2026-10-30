@@ -93,7 +93,7 @@ func (g *Gateway) HandleTokenPublish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rec := ls.Stream
-	if rec.PublishTokenHash == nil || subtle.ConstantTimeCompare(auth.HashToken(bearer(r)), rec.PublishTokenHash) != 1 {
+	if !publishTokenValid(r, rec) {
 		writeErr(w, http.StatusUnauthorized, "", "invalid publish token")
 		return
 	}
@@ -115,6 +115,12 @@ func (g *Gateway) HandleTokenPublish(w http.ResponseWriter, r *http.Request) {
 	g.forwardOffer(w, r, rec, true, rec.UserID)
 }
 
+// publishTokenValid reports whether the request carries the stream's
+// publish token (app and web senders) as its bearer token.
+func publishTokenValid(r *http.Request, rec store.Stream) bool {
+	return rec.PublishTokenHash != nil && subtle.ConstantTimeCompare(auth.HashToken(bearer(r)), rec.PublishTokenHash) == 1
+}
+
 // Play serves POST /api/streams/{id}/whep for userID ("" when signed out).
 func (g *Gateway) Play(w http.ResponseWriter, r *http.Request, userID string) {
 	ls, ok := g.Stream(r.PathValue("id"))
@@ -122,15 +128,23 @@ func (g *Gateway) Play(w http.ResponseWriter, r *http.Request, userID string) {
 		writeErr(w, http.StatusNotFound, "", errStreamGone.Error())
 		return
 	}
-	room, err := g.db.GetRoom(r.Context(), ls.Stream.RoomID)
+	if g.allowWatch(w, r, ls.Stream, userID) {
+		g.forwardOffer(w, r, ls.Stream, false, userID)
+	}
+}
+
+// allowWatch checks that userID may watch the stream, answering the
+// request if not.
+func (g *Gateway) allowWatch(w http.ResponseWriter, r *http.Request, rec store.Stream, userID string) bool {
+	room, err := g.db.GetRoom(r.Context(), rec.RoomID)
 	if err != nil {
 		g.internalError(w, r, err)
-		return
+		return false
 	}
 	reason, err := g.rooms.Check(r.Context(), room, userID, access.Watch)
 	if err != nil {
 		g.internalError(w, r, err)
-		return
+		return false
 	}
 	if reason != access.OK {
 		status := http.StatusForbidden
@@ -138,9 +152,9 @@ func (g *Gateway) Play(w http.ResponseWriter, r *http.Request, userID string) {
 			status = http.StatusUnauthorized
 		}
 		writeErr(w, status, string(reason), "you may not watch this stream")
-		return
+		return false
 	}
-	g.forwardOffer(w, r, ls.Stream, false, userID)
+	return true
 }
 
 // playQuery reads ?paused=true, ?preview=false and ?tab=<id> from a WHEP

@@ -262,3 +262,7 @@ func (s *Server) endStream(w http.ResponseWriter, r *http.Request, cur auth.Curr
 func (s *Server) play(w http.ResponseWriter, r *http.Request) {
 	s.Gateway.Play(w, r, userID(r))
 }
+
+func (s *Server) thumbnail(w http.ResponseWriter, r *http.Request) {
+	s.Gateway.HandleThumbnail(w, r, userID(r))
+}

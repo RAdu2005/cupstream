@@ -216,6 +216,12 @@ export interface Stream {
    * viewers of an OBS stream wait up to this long for the picture.
    */
   keyFrameInterval?: number /* float64 */;
+  /**
+   * ThumbnailAt is when the stream's latest thumbnail arrived (Unix
+   * milliseconds), or 0 without one. The picture is at
+   * GET /api/streams/{id}/thumbnail; app and web senders upload it.
+   */
+  thumbnailAt?: number /* int64 */;
 }
 /**
  * PauseTracks is the optional body of POST /api/media/{stream}/whep/{secret}/pause

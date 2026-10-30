@@ -180,6 +180,10 @@ type Stream struct {
 	// in seconds, when known. OBS ignores requests for key frames, so new
 	// viewers of an OBS stream wait up to this long for the picture.
 	KeyFrameInterval float64 `json:"keyFrameInterval,omitempty"`
+	// ThumbnailAt is when the stream's latest thumbnail arrived (Unix
+	// milliseconds), or 0 without one. The picture is at
+	// GET /api/streams/{id}/thumbnail; app and web senders upload it.
+	ThumbnailAt int64 `json:"thumbnailAt,omitempty"`
 }
 
 // PauseTracks is the optional body of POST /api/media/{stream}/whep/{secret}/pause
