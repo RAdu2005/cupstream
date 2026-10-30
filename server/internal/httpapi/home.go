@@ -74,6 +74,22 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request, cur auth.Current) 
 		return cmp.Or(cmp.Compare(len(b.Streams), len(a.Streams)), cmp.Compare(ownerName(a), ownerName(b)))
 	})
 
+	voice, ok, err := s.Rooms.CurrentDiscordRoom(ctx, cur.User.ID)
+	if err != nil {
+		internalError(w, r, err)
+		return
+	}
+	if ok {
+		var list []api.HomeRoom
+		if err := add(&list, voice, ""); err != nil {
+			internalError(w, r, err)
+			return
+		}
+		if len(list) == 1 {
+			out.Voice = &list[0]
+		}
+	}
+
 	friendIDs, err := s.Friends.FriendIDs(ctx, cur.User.ID)
 	if err != nil {
 		internalError(w, r, err)
@@ -117,6 +133,12 @@ func (s *Server) homeRoom(ctx context.Context, users *view.Users, room store.Roo
 			return hr, false, err
 		}
 		hr.Owner = &owner
+	}
+	if room.Kind == string(access.Discord) {
+		// Watching needs presence in the channel, so names are not a secret.
+		if hr.Discord, err = s.discordChannel(ctx, room, userID, true); err != nil {
+			return hr, false, err
+		}
 	}
 	for _, ls := range s.Gateway.RoomStreams(room.ID) {
 		st, err := view.Stream(ctx, users, ls)

@@ -61,6 +61,10 @@ type Bot struct {
 	// EndStreams ends every stream in a room, with a reason
 	// (gateway.EndDiscord*). Set it before Run.
 	EndStreams func(ctx context.Context, room store.Room, reason string)
+	// StreamerGrace tells a CupStream user who left a voice channel that
+	// their stream in its room, if any, ends at endsAt; a zero endsAt means
+	// they are back. Set it before Run.
+	StreamerGrace func(ctx context.Context, discordUserID string, room store.Room, endsAt time.Time)
 
 	ctx context.Context // Run's, for scheduled work
 
@@ -74,12 +78,13 @@ type Bot struct {
 func New(db *store.DB, rs *rooms.Service, token string) *Bot {
 	return &Bot{
 		db: db, rooms: rs, token: token, now: time.Now,
-		after:      func(d time.Duration, f func()) { time.AfterFunc(d, f) },
-		Reevaluate: func(context.Context, store.Room) {},
-		EndStreams: func(context.Context, store.Room, string) {},
-		ctx:        context.Background(),
-		guilds:     map[string]*guild{},
-		settings:   map[string]store.DiscordGuild{},
+		after:         func(d time.Duration, f func()) { time.AfterFunc(d, f) },
+		Reevaluate:    func(context.Context, store.Room) {},
+		EndStreams:    func(context.Context, store.Room, string) {},
+		StreamerGrace: func(context.Context, string, store.Room, time.Time) {},
+		ctx:           context.Background(),
+		guilds:        map[string]*guild{},
+		settings:      map[string]store.DiscordGuild{},
 	}
 }
 
@@ -307,7 +312,12 @@ func (b *Bot) handle(e any) {
 	case *discordgo.ChannelDelete:
 		todo = b.onChannel(e.Channel, true)
 	case *discordgo.VoiceStateUpdate:
-		todo = b.onVoiceState(e.VoiceState)
+		var left, joined string
+		todo, left, joined = b.onVoiceState(e.VoiceState)
+		if left != "" || joined != "" {
+			vs, now := e.VoiceState, b.now()
+			b.after(0, func() { b.notifyStreamer(vs.GuildID, vs.UserID, left, joined, now) })
+		}
 	}
 	for _, r := range todo {
 		b.schedule(r)
@@ -563,9 +573,9 @@ func (b *Bot) onChannel(c *discordgo.Channel, deleted bool) []recheck {
 	return []recheck{{guildID: g.id, channels: []string{c.ID}, delays: afterPermChange}}
 }
 
-func (b *Bot) onVoiceState(vs *discordgo.VoiceState) []recheck {
+func (b *Bot) onVoiceState(vs *discordgo.VoiceState) (todo []recheck, left, joined string) {
 	if vs == nil || vs.GuildID == "" {
-		return nil
+		return nil, "", ""
 	}
 	linked := b.linked(vs.UserID)
 
@@ -573,19 +583,18 @@ func (b *Bot) onVoiceState(vs *discordgo.VoiceState) []recheck {
 	defer b.mu.Unlock()
 	g := b.guilds[vs.GuildID]
 	if g == nil {
-		return nil
+		return nil, "", ""
 	}
 	if !linked {
 		// Not (or no longer) a CupStream user.
 		delete(g.members, vs.UserID)
-		return nil
+		return nil, "", ""
 	}
 	now := b.now()
 	before := g.canVideo(now)
 	left, joined, permsChanged := g.setVoice(vs.UserID, vs.ChannelID, vs.Member, now)
 	g.noteVideoLoss(before, now)
 
-	var todo []recheck
 	if left != "" {
 		todo = append(todo, recheck{guildID: g.id, channels: []string{left}, delays: afterLeaving})
 	}
@@ -595,7 +604,46 @@ func (b *Bot) onVoiceState(vs *discordgo.VoiceState) []recheck {
 	case permsChanged && vs.ChannelID != "":
 		todo = append(todo, recheck{guildID: g.id, channels: []string{vs.ChannelID}, delays: afterPermChange})
 	}
-	return todo
+	return todo, left, joined
+}
+
+// notifyStreamer starts or cancels the countdown of a streamer who left or
+// joined a voice channel.
+func (b *Bot) notifyStreamer(guildID, userID, left, joined string, at time.Time) {
+	for _, c := range []string{left, joined} {
+		if c == "" {
+			continue
+		}
+		room, err := b.db.GetDiscordRoom(b.ctx, store.GetDiscordRoomParams{
+			GuildID: sql.NullString{String: guildID, Valid: true}, ChannelID: sql.NullString{String: c, Valid: true},
+		})
+		if err != nil {
+			continue // no room, so no stream there
+		}
+		var endsAt time.Time
+		if c == left {
+			endsAt = at.Add(streamerGrace)
+		}
+		b.StreamerGrace(b.ctx, userID, room, endsAt)
+	}
+}
+
+// Names returns the names of a server and channel, and the server's icon,
+// for people who are members of that server.
+func (b *Bot) Names(guildID, channelID string) (guildName, channelName, iconURL string, ok bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	g := b.guilds[guildID]
+	if g == nil || !g.synced && g.name == "" {
+		return "", "", "", false
+	}
+	if g.icon != "" {
+		iconURL = discordgo.EndpointGuildIcon(g.id, g.icon)
+	}
+	if ch := g.channels[channelID]; ch != nil {
+		channelName = ch.name
+	}
+	return g.name, channelName, iconURL, true
 }
 
 // refreshStreamers fetches the members streaming in Discord rooms again:

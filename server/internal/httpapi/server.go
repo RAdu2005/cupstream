@@ -40,6 +40,7 @@ type Deps struct {
 	Gateway   *gateway.Gateway
 	Realtime  *realtime.Hub
 	Friends   *friends.Service
+	Bot       DiscordNames // nil without the Discord bot
 	MediaMTX  *mediamtx.Client
 	Web       http.Handler
 }
@@ -116,6 +117,9 @@ func (s *Server) Handler() http.Handler {
 
 	// Bandwidth warnings: the viewer's download test.
 	mux.HandleFunc("GET /api/bandwidth-test", s.bandwidthTest)
+
+	// Discord rooms.
+	mux.Handle("GET /api/rooms/{slug}/discord", requireUser(s.roomDiscord))
 
 	// Media signaling.
 	mux.HandleFunc("POST /whip", s.Gateway.HandleOBSPublish)

@@ -202,6 +202,8 @@ type Room struct {
 	Visibility  string      `json:"visibility,omitempty" tstype:"Visibility"` // link rooms
 	Permissions Permissions `json:"permissions"`
 	Streams     []Stream    `json:"streams"`
+	// Discord rooms: the voice channel.
+	Discord *DiscordChannel `json:"discord,omitempty"`
 }
 
 type UpdateRoomRequest struct {
@@ -279,10 +281,15 @@ type HomeRoom struct {
 	Access    string   `json:"access,omitempty" tstype:"'own' | 'allowed' | 'pass'"`
 	CanStream bool     `json:"canStream"`
 	Streams   []Stream `json:"streams"`
+	// Discord rooms: the voice channel.
+	Discord *DiscordChannel `json:"discord,omitempty"`
 }
 
 // Home is the response of GET /api/home.
 type Home struct {
+	// Voice is the room of the Discord voice channel the user is in, when
+	// the CupStream bot is in that server.
+	Voice *HomeRoom `json:"voice,omitempty"`
 	// The user's link room first, then the rooms they may enter, live ones
 	// first.
 	Rooms []HomeRoom `json:"rooms"`
@@ -499,4 +506,25 @@ type RealtimeError struct {
 	Ref   string `json:"ref,omitempty"`
 	Code  string `json:"code"`
 	Error string `json:"error"`
+}
+
+// DiscordChannel is a Discord room's voice channel, also served at
+// GET /api/rooms/{slug}/discord to people who may not enter yet. The server
+// and channel names are only given to members of the server.
+type DiscordChannel struct {
+	GuildName    string `json:"guildName,omitempty"`
+	ChannelName  string `json:"channelName,omitempty"`
+	GuildIconURL string `json:"guildIconUrl,omitempty"`
+	// URL opens the voice channel in Discord.
+	URL string `json:"url"`
+}
+
+// StreamGrace tells a streamer, on every tab, that their stream in a
+// Discord room ends in EndsInMs milliseconds because they left the voice
+// channel. 0 means they are back and it goes on.
+type StreamGrace struct {
+	Type     string `json:"type" tstype:"'streamGrace'"`
+	RoomSlug string `json:"roomSlug"`
+	StreamID string `json:"streamId"`
+	EndsInMs int64  `json:"endsInMs"`
 }

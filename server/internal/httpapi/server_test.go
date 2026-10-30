@@ -43,6 +43,7 @@ type envOptions struct {
 	oauth        bool
 	// clientIPHeader is CUPSTREAM_CLIENT_IP_HEADER.
 	clientIPHeader string
+	bot            *fakeBot
 }
 
 func newTestEnv(t *testing.T, o envOptions) *testEnv {
@@ -70,7 +71,7 @@ func newTestEnv(t *testing.T, o envOptions) *testEnv {
 		Config: cfg, Version: "test", DB: db, Sealer: sealer, Sessions: auth.NewSessions(db, false),
 		AppCodes: auth.NewAppCodes(), Rooms: rs, MediaMTX: media, Providers: map[string]oauth.Provider{},
 		Friends: friends.New(db),
-		Web: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "website") }),
+		Web:     http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "website") }),
 	}
 	if o.oauth {
 		e.google = newMockGoogle(t)
@@ -81,6 +82,10 @@ func newTestEnv(t *testing.T, o envOptions) *testEnv {
 		deps.Discord = auth.NewDiscordSync(db, sealer, dp)
 	}
 	deps.Accounts = auth.NewAccounts(db, deps.Discord)
+	if o.bot != nil {
+		rs.SetVoice(o.bot)
+		deps.Bot = o.bot
+	}
 	e.gw = gateway.New(db, media, rs, cfg.PublicURL)
 	deps.Gateway = e.gw
 	e.hub = realtime.New(db, rs, e.gw, cfg)
