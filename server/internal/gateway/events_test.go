@@ -135,9 +135,11 @@ func TestStats(t *testing.T) {
 	st := f.publish(t)
 	path := "s/" + st.Stream.ID
 	v := f.play(t, st, f.user.ID, "", http.StatusCreated)
-	pub := f.mtx.Sessions(path)[0]
-	if pub.State != "publish" {
-		pub = f.mtx.Sessions(path)[1]
+	var pub mtxtest.Session
+	for _, s := range f.mtx.Sessions(path) {
+		if s.State == "publish" {
+			pub = s
+		}
 	}
 	f.mtx.SetKeyFrameInterval(path, 8.5)
 	f.reconcile(t)
