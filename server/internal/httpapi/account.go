@@ -56,6 +56,7 @@ func (s *Server) updateProfile(w http.ResponseWriter, r *http.Request, cur auth.
 	case err != nil:
 		internalError(w, r, err)
 	default:
+		s.Realtime.UserChanged(view.User(u))
 		writeJSON(w, http.StatusOK, api.Me{User: view.User(u)})
 	}
 }

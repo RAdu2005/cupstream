@@ -433,6 +433,26 @@ func (h *Hub) dropRoom(roomID string) {
 	delete(h.subs, roomID)
 }
 
+// UserChanged shows a user's new handle, name or avatar in the presence of
+// the rooms their connections are in. Their streams follow with the next
+// statistics update, which describes streams afresh.
+func (h *Hub) UserChanged(u api.User) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	rooms := map[*roomSubs]bool{}
+	for c := range h.conns {
+		if c.userID == u.ID {
+			c.user = u
+			for _, rs := range c.subs {
+				rooms[rs] = true
+			}
+		}
+	}
+	for rs := range rooms {
+		h.updatePresenceLocked(rs, nil)
+	}
+}
+
 // CloseSession closes the connections signed in with a session that ended
 // (signing out, a revoked session).
 func (h *Hub) CloseSession(sessionID string) {
