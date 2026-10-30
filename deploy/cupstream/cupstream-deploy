@@ -1,0 +1,66 @@
+#!/bin/bash
+# Installs the CupStream binary read from standard input and restarts the
+# server. Usage: cupstream-deploy <commit> < cupstream
+#
+# The CI deploy job runs it over SSH as the `deploy` user, whose key can run
+# nothing else. On the server:
+#
+#   /usr/local/sbin/cupstream-deploy     this file, root:root 0755
+#   /etc/sudoers.d/cupstream-deploy      deploy ALL=(root) NOPASSWD: /usr/local/sbin/cupstream-deploy *
+#   ~deploy/.ssh/authorized_keys         restrict,command="sudo /usr/local/sbin/cupstream-deploy \"$SSH_ORIGINAL_COMMAND\"" ssh-ed25519 ...
+#
+# Before the restart it keeps the previous binary and a copy of the database
+# (migrations run when the server starts); if the new server does not report
+# the expected commit on /healthz, it puts both back. The output ends up in
+# public CI logs, so it never includes server logs.
+set -euo pipefail
+umask 077
+
+bin=/usr/local/bin/cupstream
+state=/var/lib/cupstream
+backups=/var/lib/cupstream-deploy
+keep=5
+health=http://127.0.0.1:8080/healthz
+
+version=${1:-}
+[[ $version =~ ^[0-9a-f]{40}$ ]] || { echo "usage: cupstream-deploy <commit sha> < binary" >&2; exit 2; }
+
+exec 9>/run/lock/cupstream-deploy
+flock 9
+
+new=$(mktemp)
+trap 'rm -f "$new"' EXIT
+head -c 200M >"$new"
+[ "$(head -c 4 "$new" | od -An -tx1 | tr -d ' ')" = 7f454c46 ] || { echo "not a Linux binary" >&2; exit 1; }
+
+healthy() {
+	for _ in $(seq 30); do
+		[ "$(curl -sf "$health" | jq -r .version 2>/dev/null)" = "$version" ] && return 0
+		sleep 1
+	done
+	return 1
+}
+
+backup=$backups/$(date -u +%Y%m%dT%H%M%SZ)
+mkdir -p "$backup"
+echo "stopping cupstream"
+systemctl stop cupstream
+cp -p "$bin" "$backup/"
+cp -p "$state"/cupstream.db* "$backup/" 2>/dev/null || true
+
+install -m 0755 "$new" "$bin"
+systemctl start cupstream
+if healthy; then
+	echo "cupstream $version is running"
+	ls -1d "$backups"/*/ | head -n -"$keep" | xargs -r rm -rf
+	exit 0
+fi
+
+echo "cupstream $version did not become healthy; restoring the previous binary and database" >&2
+echo "see journalctl -u cupstream on the server" >&2
+systemctl stop cupstream
+cp -p "$backup/cupstream" "$bin"
+rm -f "$state"/cupstream.db*
+cp -p "$backup"/cupstream.db* "$state/" 2>/dev/null || true
+systemctl start cupstream
+exit 1

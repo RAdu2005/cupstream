@@ -25,6 +25,7 @@ import (
 // Deps are the services the HTTP layer uses.
 type Deps struct {
 	Config    *config.Config
+	Version   string // the build's commit, reported by /healthz
 	DB        *store.DB
 	Sealer    *seal.Sealer
 	Sessions  *auth.Sessions
@@ -110,7 +111,7 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
 
-	h := api.Health{Status: "ok", Database: s.DB.SQL.PingContext(ctx) == nil}
+	h := api.Health{Status: "ok", Version: s.Version, Database: s.DB.SQL.PingContext(ctx) == nil}
 	if info, err := s.MediaMTX.Info(ctx); err == nil {
 		f := mediamtx.FeaturesOf(info.Version)
 		h.MediaMTX = api.MediaMTXHealth{Reachable: true, Version: info.Version, Pause: f.Pause, Events: f.Events}

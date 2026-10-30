@@ -61,7 +61,7 @@ func newTestEnv(t *testing.T, o envOptions) *testEnv {
 	// through cfg at request time.
 	cfg := &config.Config{PublicURL: &url.URL{Scheme: "http", Host: "localhost"}, DevLogin: o.devLogin}
 	deps := Deps{
-		Config: cfg, DB: db, Sealer: sealer, Sessions: auth.NewSessions(db, false),
+		Config: cfg, Version: "test", DB: db, Sealer: sealer, Sessions: auth.NewSessions(db, false),
 		Rooms: rs, MediaMTX: media, Providers: map[string]oauth.Provider{},
 		Web: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "website") }),
 	}
@@ -169,7 +169,7 @@ func TestHealth(t *testing.T) {
 	b := newTestEnv(t, envOptions{}).browser(t)
 	r := b.do("GET", "/healthz", "")
 	h := decode[api.Health](t, r.body)
-	if r.status != 200 || h.Status != "ok" || !h.Database || h.MediaMTX.Version != "v1.21.2-cupstream.2" || !h.MediaMTX.Pause || !h.MediaMTX.Events {
+	if r.status != 200 || h.Status != "ok" || h.Version != "test" || !h.Database || h.MediaMTX.Version != "v1.21.2-cupstream.2" || !h.MediaMTX.Pause || !h.MediaMTX.Events {
 		t.Fatalf("got %d %+v", r.status, h)
 	}
 

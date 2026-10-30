@@ -24,6 +24,10 @@ import (
 	"github.com/RAdu2005/cupstream/server/internal/webui"
 )
 
+// version is the commit the binary was built from, set with
+// -ldflags "-X main.version=..." (see the Makefile).
+var version = "dev"
+
 func main() {
 	if err := run(); err != nil {
 		slog.Error("fatal", "err", err)
@@ -37,6 +41,7 @@ func run() error {
 		return fmt.Errorf("configuration: %w", err)
 	}
 	setupLogging(cfg)
+	slog.Info("starting", "version", version)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -93,6 +98,7 @@ func run() error {
 		Addr: cfg.Addr,
 		Handler: httpapi.New(httpapi.Deps{
 			Config:    cfg,
+			Version:   version,
 			DB:        db,
 			Sealer:    sealer,
 			Sessions:  sessions,
