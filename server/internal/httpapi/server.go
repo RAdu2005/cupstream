@@ -92,6 +92,10 @@ func (s *Server) Handler() http.Handler {
 	// Invite tokens travel in the body, so they stay out of request logs.
 	mux.HandleFunc("POST /api/invites/preview", s.previewInvite)
 	mux.Handle("POST /api/invites/redeem", requireUser(s.redeemInvite))
+	mux.Handle("POST /api/rooms/{slug}/kick/{handle}", requireUser(s.kick))
+	mux.Handle("GET /api/rooms/{slug}/bans", requireUser(s.listBans))
+	mux.Handle("PUT /api/rooms/{slug}/bans/{handle}", requireUser(s.ban))
+	mux.Handle("DELETE /api/rooms/{slug}/bans/{handle}", requireUser(s.unban))
 	mux.Handle("POST /api/streams", requireUser(s.startStream))
 	mux.Handle("DELETE /api/streams/{id}", requireUser(s.endStream))
 

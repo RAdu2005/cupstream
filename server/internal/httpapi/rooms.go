@@ -147,7 +147,8 @@ func (s *Server) listAllowed(w http.ResponseWriter, r *http.Request, cur auth.Cu
 	writeJSON(w, http.StatusOK, out)
 }
 
-// allowedTarget loads the room and the user named in the path.
+// allowedTarget loads the owner's room and the user named in the path, for
+// the allowed list, kicks and bans.
 func (s *Server) allowedTarget(w http.ResponseWriter, r *http.Request, cur auth.Current) (store.Room, store.User, bool) {
 	room, ok := s.ownRoom(w, r, cur)
 	if !ok {

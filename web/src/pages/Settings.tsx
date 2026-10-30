@@ -16,7 +16,7 @@ import {
   useUpdateSettings,
 } from '@/api/account';
 import { useAuthProviders, useMe } from '@/api/auth';
-import { useAllowed, useRemoveAllowed, useRoom, useSetAllowed, useUpdateRoom } from '@/api/rooms';
+import { useAllowed, useBans, useRemoveAllowed, useRoom, useSetAllowed, useUnban, useUpdateRoom } from '@/api/rooms';
 import type { Account, AuthProvider, Visibility } from '@/api/types.gen';
 import { Button, Card, Input } from '@/components/ui';
 import { oauthErrors, providerLabel, visibilityLabel } from '@/lib/labels';
@@ -350,7 +350,35 @@ function RoomSettings({ slug }: { slug: string }) {
           ))}
         </ul>
       </div>
+      <BannedPeople slug={slug} />
     </Section>
+  );
+}
+
+function BannedPeople({ slug }: { slug: string }) {
+  const bans = useBans(slug);
+  const unban = useUnban(slug);
+  return (
+    <div className="space-y-2 border-t border-line pt-4">
+      <h3 className="text-sm font-medium">Banned people</h3>
+      <p className="text-sm text-muted">
+        They cannot enter, not even with an invite link. Ban someone from the list of people in your room.
+      </p>
+      {unban.error && <p className="text-sm text-danger">{unban.error.message}</p>}
+      {bans.data?.length === 0 && <p className="text-sm text-muted">Nobody is banned.</p>}
+      <ul className="divide-y divide-line">
+        {bans.data?.map((b) => (
+          <li key={b.user.id} className="flex items-center justify-between gap-3 py-2 text-sm">
+            <span>
+              <span className="font-semibold">{b.user.displayName}</span> <span className="text-muted">@{b.user.handle}</span>
+            </span>
+            <Button variant="ghost" className="h-7 px-2" disabled={unban.isPending} onClick={() => unban.mutate(b.user.handle)}>
+              Unban
+            </Button>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

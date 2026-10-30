@@ -15,6 +15,8 @@ type State = {
   chat: ChatMessage[];
   viewerStats: Record<string, ViewerStats>;
   chatError: ChatError | null;
+  /** Set when the room's owner kicked this viewer. */
+  kicked: boolean;
   /** The last message sent, given back if the server refuses it. */
   lastSent: { ref: string; body: string } | null;
 };
@@ -30,6 +32,7 @@ const initial: State = {
   chat: [],
   viewerStats: {},
   chatError: null,
+  kicked: false,
   lastSent: null,
 };
 
@@ -51,7 +54,9 @@ function reduce(state: State, action: Action): State {
   const msg = action.msg;
   switch (msg.type) {
     case 'subscribed':
-      return { ...state, presence: msg.presence, chat: msg.chat };
+      return { ...state, presence: msg.presence, chat: msg.chat, kicked: false };
+    case 'refused':
+      return msg.code === 'kicked' ? { ...state, kicked: true } : state;
     case 'presence':
       return { ...state, presence: msg.presence };
     case 'chat':
