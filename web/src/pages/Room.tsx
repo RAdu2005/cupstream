@@ -8,6 +8,7 @@ import { useEndStream, useRoom } from '@/api/rooms';
 import type { Room as RoomData, Stream, ViewerStats } from '@/api/types.gen';
 import { ChatPanel } from '@/components/ChatPanel';
 import { ManageRoom } from '@/components/ManageRoom';
+import { MemberActions } from '@/components/MemberActions';
 import { Player } from '@/components/Player';
 import { PresenceList } from '@/components/PresenceList';
 import { Button, Card } from '@/components/ui';
@@ -21,8 +22,10 @@ export function Room() {
 
   if (room.isPending) return null;
   if (room.error) return <RoomRefused error={room.error} />;
+  if (live.kicked) return <Kicked />;
 
   const data = room.data;
+  const isOwner = data.kind === 'link' && !!me && data.owner?.id === me.id;
   return (
     <div className="mx-auto w-full max-w-7xl space-y-6 p-4 sm:p-8">
       <header className="flex flex-wrap items-center justify-between gap-3">
@@ -41,7 +44,7 @@ export function Room() {
             </span>
           )}
           {data.permissions.stream && <ObsHint slug={data.slug} />}
-          {data.kind === 'link' && me && data.owner?.id === me.id && <ManageRoom slug={data.slug} />}
+          {isOwner && <ManageRoom slug={data.slug} />}
         </div>
       </header>
 
@@ -62,7 +65,11 @@ export function Room() {
           </div>
         )}
         <aside className="flex flex-col gap-4">
-          <PresenceList presence={live.presence} live={new Set(data.streams.map((s) => s.user.id))} />
+          <PresenceList
+            presence={live.presence}
+            live={new Set(data.streams.map((s) => s.user.id))}
+            actions={isOwner ? (u) => u.id !== me?.id && <MemberActions slug={data.slug} user={u} /> : undefined}
+          />
           <ChatPanel
             messages={live.chat}
             signedIn={!!me}
@@ -156,6 +163,20 @@ function ObsHint({ slug }: { slug: string }) {
         <Copy className="size-3.5" />
       </button>
       {copied && <span className="text-xs text-muted">Copied</span>}
+    </div>
+  );
+}
+
+function Kicked() {
+  return (
+    <div className="flex flex-1 items-center justify-center p-4">
+      <Card className="max-w-sm space-y-4 text-center">
+        <Lock className="mx-auto size-8 text-muted" aria-hidden />
+        <p className="font-semibold">The room's owner removed you from this room.</p>
+        <Button variant="secondary" className="w-full" onClick={() => window.location.reload()}>
+          Try to enter again
+        </Button>
+      </Card>
     </div>
   );
 }

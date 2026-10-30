@@ -675,6 +675,26 @@ func (g *Gateway) CloseTabSessions(ctx context.Context, userID, tab string) int 
 	return len(ids)
 }
 
+// CloseViewerSessions closes userID's viewer sessions in a room, when the
+// room's owner removes them. It returns how many sessions it closed.
+func (g *Gateway) CloseViewerSessions(ctx context.Context, roomID, userID string) int {
+	if userID == "" {
+		return 0
+	}
+	var ids []string
+	g.mu.Lock()
+	for id, sess := range g.sessions {
+		if s := g.streams[sess.streamID]; s != nil && s.rec.RoomID == roomID && !sess.publish && sess.userID == userID {
+			ids = append(ids, id)
+		}
+	}
+	g.mu.Unlock()
+	for _, id := range ids {
+		g.kickSession(ctx, id)
+	}
+	return len(ids)
+}
+
 func (g *Gateway) snapshotLocked(id string, s *liveStream, counts map[string]int) LiveStream {
 	ls := LiveStream{Stream: s.rec, State: s.state, Viewers: counts[id], Stats: s.stats.public()}
 	if s.thumb != nil {

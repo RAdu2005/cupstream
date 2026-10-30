@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client';
-import type { AllowedEntry, Room, Visibility } from './types.gen';
+import type { AllowedEntry, BanEntry, Room, Visibility } from './types.gen';
 
 export const roomKey = (slug: string) => ['room', slug] as const;
 
@@ -57,5 +57,42 @@ export function useEndStream(slug: string) {
   return useMutation({
     mutationFn: (id: string) => api<void>(`/api/streams/${id}`, { method: 'DELETE' }),
     onSuccess: () => qc.invalidateQueries({ queryKey: roomKey(slug) }),
+  });
+}
+
+/** The owner ends someone's sessions and temporary access to the room. */
+export function useKick(slug: string) {
+  return useMutation({
+    mutationFn: (handle: string) =>
+      api<void>(`/api/rooms/${slug}/kick/${encodeURIComponent(handle)}`, { method: 'POST' }),
+  });
+}
+
+export function useBans(slug: string) {
+  return useQuery({
+    queryKey: ['room', slug, 'bans'],
+    queryFn: () => api<BanEntry[]>(`/api/rooms/${slug}/bans`),
+  });
+}
+
+/** Banning also kicks and removes from the allowed list. */
+export function useBan(slug: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (handle: string) =>
+      api<void>(`/api/rooms/${slug}/bans/${encodeURIComponent(handle)}`, { method: 'PUT' }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['room', slug, 'bans'] });
+      void qc.invalidateQueries({ queryKey: ['room', slug, 'allowed'] });
+    },
+  });
+}
+
+export function useUnban(slug: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (handle: string) =>
+      api<void>(`/api/rooms/${slug}/bans/${encodeURIComponent(handle)}`, { method: 'DELETE' }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['room', slug, 'bans'] }),
   });
 }

@@ -263,6 +263,12 @@ type RedeemedInvite struct {
 	RoomSlug string `json:"roomSlug"`
 }
 
+// BanEntry is someone banned from a link room. BannedAt is Unix seconds.
+type BanEntry struct {
+	User     User  `json:"user"`
+	BannedAt int64 `json:"bannedAt"`
+}
+
 // StartStreamRequest is the body of POST /api/streams (app and web senders).
 type StartStreamRequest struct {
 	Source string `json:"source" tstype:"'app' | 'web'"`
@@ -327,8 +333,8 @@ type Subscribed struct {
 }
 
 // Refused means the subscription was refused or has ended because access
-// changed. Code is an access reason ("not_allowed", "sign_in_required", …)
-// or "not_found".
+// changed. Code is an access reason ("not_allowed", "sign_in_required", …),
+// "not_found", or "kicked" or "banned" when the room's owner removed them.
 type Refused struct {
 	Type  string `json:"type" tstype:"'refused'"`
 	Room  string `json:"room"`

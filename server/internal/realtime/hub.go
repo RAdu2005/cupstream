@@ -414,6 +414,24 @@ func (h *Hub) RoomIdle(ctx context.Context, roomID string) {
 	h.Reevaluate(ctx, room)
 }
 
+// RemoveUser unsubscribes userID's connections from a room because its
+// owner kicked or banned them, and tells them with code ("kicked" or
+// "banned").
+func (h *Hub) RemoveUser(room store.Room, userID, code string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	rs := h.subs[room.ID]
+	if rs == nil || userID == "" {
+		return
+	}
+	for c := range rs.conns {
+		if c.userID == userID {
+			h.unsubscribeLocked(c, rs)
+			c.send(api.Refused{Type: "refused", Room: room.Slug, Code: code, Error: "the room's owner removed you"})
+		}
+	}
+}
+
 // RecheckAll checks every subscription again, and the media sessions in
 // those rooms, for access that ends by itself (temporary passes) or rooms
 // that were deleted. Run does it every minute.

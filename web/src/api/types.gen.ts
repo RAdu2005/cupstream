@@ -366,6 +366,13 @@ export interface RedeemedInvite {
   roomSlug: string;
 }
 /**
+ * BanEntry is someone banned from a link room. BannedAt is Unix seconds.
+ */
+export interface BanEntry {
+  user: User;
+  bannedAt: number /* int64 */;
+}
+/**
  * StartStreamRequest is the body of POST /api/streams (app and web senders).
  */
 export interface StartStreamRequest {
@@ -442,8 +449,8 @@ export interface Subscribed {
 }
 /**
  * Refused means the subscription was refused or has ended because access
- * changed. Code is an access reason ("not_allowed", "sign_in_required", …)
- * or "not_found".
+ * changed. Code is an access reason ("not_allowed", "sign_in_required", …),
+ * "not_found", or "kicked" or "banned" when the room's owner removed them.
  */
 export interface Refused {
   type: 'refused';

@@ -1,7 +1,19 @@
-import type { Presence } from '@/api/types.gen';
+import type { ReactNode } from 'react';
+import type { Presence, User } from '@/api/types.gen';
 
-/** Who is in the room right now; people who are live get a badge. */
-export function PresenceList({ presence, live }: { presence: Presence; live: Set<string> }) {
+/**
+ * Who is in the room right now; people who are live get a badge. actions,
+ * if given, renders controls next to a member (the owner's kick and ban).
+ */
+export function PresenceList({
+  presence,
+  live,
+  actions,
+}: {
+  presence: Presence;
+  live: Set<string>;
+  actions?: (user: User) => ReactNode;
+}) {
   const total = presence.members.length + presence.anonymous;
   return (
     <section aria-label="In this room" className="rounded-xl border border-line bg-surface">
@@ -23,6 +35,7 @@ export function PresenceList({ presence, live }: { presence: Presence; live: Set
             )}
             <span className="truncate font-semibold">{u.displayName}</span>
             {live.has(u.id) && <span className="rounded bg-live px-1 text-[10px] font-bold text-white">LIVE</span>}
+            {actions && <span className="ml-auto">{actions(u)}</span>}
           </li>
         ))}
         {presence.anonymous > 0 && (
