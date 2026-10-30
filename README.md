@@ -9,6 +9,7 @@ The design and the implementation plan are in [output/md/cupstream-project-overv
 | Path | What |
 |---|---|
 | `server/` | Go server: OAuth sign-in and accounts, rooms and access checks (`internal/access`), friends (`internal/friends`), the WHIP/WHEP media gateway (`internal/gateway`), the realtime WebSocket with presence and chat (`internal/realtime`), and the Discord bot (`internal/discord`). SQLite with goose migrations and sqlc queries. |
+| `server/loadtest/` | Load test: synthetic WHIP publishers and WHEP viewers against `make dev` ([README](server/loadtest/README.md)). Never against production. |
 | `web/` | Website: React, TypeScript, Vite, Tailwind CSS, TanStack Query, React Router. |
 | `companion/` | The desktop app (Rust, GStreamer): for now its media pipeline and the `cupstream-cli` prototype. See [companion/README.md](companion/README.md). |
 | `deploy/mediamtx/` | MediaMTX image, built from [our fork](https://github.com/RAdu2005/mediamtx) at a pinned tag, and its configuration. |

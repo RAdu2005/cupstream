@@ -29,6 +29,7 @@ test: test-server test-web
 
 test-server:
 	cd server && $(MISE) go vet ./... && $(MISE) go test -race ./...
+	cd server/loadtest && $(MISE) go vet ./...
 
 test-web:
 	cd web && $(MISE) npm run typecheck && $(MISE) npm test
