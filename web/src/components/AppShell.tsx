@@ -1,6 +1,7 @@
 import { CupSoda, LogOut, Settings } from 'lucide-react';
 import { Link, Outlet, useNavigate } from 'react-router';
 import { useLogout, useMe } from '@/api/auth';
+import { GoLiveButton } from './GoLiveButton';
 import { Button } from './ui';
 
 export function AppShell() {
@@ -43,6 +44,7 @@ function UserMenu() {
   }
   return (
     <div className="flex items-center gap-3">
+      <GoLiveButton />
       <span className="flex items-center gap-2 text-sm">
         {user.avatarUrl && <img src={user.avatarUrl} alt="" className="size-6 rounded-full" />}
         <span className="font-semibold">{user.displayName}</span>
