@@ -214,6 +214,32 @@ func TestRealtimeSubscriptions(t *testing.T) {
 	}
 }
 
+// A rename shows in presence and chat without reconnecting.
+func TestRealtimeRename(t *testing.T) {
+	e := newTestEnv(t, envOptions{devLogin: true})
+	alice, bob := e.browser(t), e.browser(t)
+	alice.devLogin("alice")
+	bob.devLogin("bob")
+	slug := alice.roomSlug()
+	alice.json("PATCH", "/api/rooms/"+slug, api.UpdateRoomRequest{Visibility: "signed_in"}, nil, 200)
+	as, bs := alice.connect("alice-tab"), bob.connect("bob-tab-1")
+	as.subscribe(slug)
+	bs.subscribe(slug)
+	next(as, "presence", presenceIs("alice,bob", 0))
+
+	bob.json("PATCH", "/api/account", api.UpdateProfileRequest{Handle: "robert", DisplayName: "Robert"}, nil, 200)
+	ev := next(as, "presence", presenceIs("alice,robert", 0))
+	if ev.Presence.Members[1].DisplayName != "Robert" {
+		t.Fatalf("presence after the rename: %+v", ev.Presence)
+	}
+	next(bs, "presence", presenceIs("alice,robert", 0))
+
+	bs.send(api.ClientMessage{Type: "chat", Room: slug, Body: "hi"})
+	if m := next[api.ChatEvent](as, "chat").Message; m.User.Handle != "robert" || m.User.DisplayName != "Robert" {
+		t.Fatalf("chat after the rename from %+v", m.User)
+	}
+}
+
 func TestRealtimeChat(t *testing.T) {
 	e := newTestEnv(t, envOptions{devLogin: true})
 	alice, bob, anon := e.browser(t), e.browser(t), e.browser(t)

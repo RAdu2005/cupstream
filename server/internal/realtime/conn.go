@@ -47,8 +47,8 @@ const (
 type conn struct {
 	hub       *Hub
 	ws        *websocket.Conn
-	userID    string // "" when signed out
-	user      api.User
+	userID    string   // "" when signed out
+	user      api.User // guarded by hub.mu once connected: UserChanged updates it
 	sessionID string
 	tab       string
 

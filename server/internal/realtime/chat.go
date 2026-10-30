@@ -100,7 +100,7 @@ func (h *Hub) sendChat(ctx context.Context, c *conn, m api.ClientMessage) {
 		return
 	}
 
-	msg := api.ChatMessage{ID: uuid.Must(uuid.NewV7()).String(), User: c.user, Body: body, CreatedAt: now.Unix()}
+	msg := api.ChatMessage{ID: uuid.Must(uuid.NewV7()).String(), Body: body, CreatedAt: now.Unix()}
 	if err := h.db.CreateChatMessage(ctx, store.CreateChatMessageParams{
 		ID: msg.ID, RoomID: room.ID, UserID: c.userID, Body: body, CreatedAt: msg.CreatedAt,
 	}); err != nil {
@@ -108,6 +108,7 @@ func (h *Hub) sendChat(ctx context.Context, c *conn, m api.ClientMessage) {
 		return
 	}
 	h.mu.Lock()
+	msg.User = c.user
 	if rs := h.subs[room.ID]; rs != nil {
 		h.broadcastLocked(rs, api.ChatEvent{Type: "chat", Room: room.Slug, Message: msg})
 	}
