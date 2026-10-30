@@ -18,6 +18,7 @@ import (
 	"github.com/RAdu2005/cupstream/server/internal/httpapi"
 	"github.com/RAdu2005/cupstream/server/internal/mediamtx"
 	"github.com/RAdu2005/cupstream/server/internal/oauth"
+	"github.com/RAdu2005/cupstream/server/internal/realtime"
 	"github.com/RAdu2005/cupstream/server/internal/rooms"
 	"github.com/RAdu2005/cupstream/server/internal/seal"
 	"github.com/RAdu2005/cupstream/server/internal/store"
@@ -93,6 +94,12 @@ func run() error {
 			slog.Error("media gateway stopped", "err", err)
 		}
 	}()
+	hub := realtime.New(db, roomService, gw, cfg)
+	hubDone := make(chan struct{})
+	go func() {
+		defer close(hubDone)
+		hub.Run(ctx)
+	}()
 
 	srv := &http.Server{
 		Addr: cfg.Addr,
@@ -107,6 +114,7 @@ func run() error {
 			Providers: providers,
 			Rooms:     roomService,
 			Gateway:   gw,
+			Realtime:  hub,
 			MediaMTX:  media,
 			Web:       webui.Handler(),
 		}).Handler(),
@@ -135,7 +143,9 @@ func run() error {
 	slog.Info("shutting down")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil && !errors.Is(err, context.DeadlineExceeded) {
+	err = srv.Shutdown(shutdownCtx)
+	<-hubDone // WebSockets are not part of the server's shutdown
+	if err != nil && !errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
 	return nil

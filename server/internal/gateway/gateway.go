@@ -90,6 +90,7 @@ type session struct {
 	streamID  string
 	publish   bool
 	userID    string // viewer ("" for anonymous) or publisher
+	tab       string // the viewer's browser tab, if it said (see CloseTabSessions)
 	created   time.Time
 	confirmed bool // seen in MediaMTX's session list or event stream
 
@@ -134,6 +135,10 @@ type Gateway struct {
 	sessions map[string]*session    // by MediaMTX session ID
 	early    map[string]earlyEvent  // by MediaMTX session ID
 
+	// changes is signalled when streams start, end or change state, or their
+	// viewers change (see Changes).
+	changes chan struct{}
+
 	// pauseMu serializes pause and resume calls, which read and change a
 	// session's pause state around a MediaMTX request.
 	pauseMu sync.Mutex
@@ -145,6 +150,20 @@ func New(db *store.DB, mtx *mediamtx.Client, rs *rooms.Service, publicURL *url.U
 		streams:  map[string]*liveStream{},
 		sessions: map[string]*session{},
 		early:    map[string]earlyEvent{},
+		changes:  make(chan struct{}, 1),
+	}
+}
+
+// Changes is signalled after streams start, end or change state, and after
+// their viewers change. Signals are coalesced: one receive may stand for
+// several changes, so the receiver reads the current state (RoomStreams).
+// Bitrates and other statistics change without a signal.
+func (g *Gateway) Changes() <-chan struct{} { return g.changes }
+
+func (g *Gateway) changed() {
+	select {
+	case g.changes <- struct{}{}:
+	default:
 	}
 }
 
@@ -280,6 +299,7 @@ func (g *Gateway) Restore(ctx context.Context) error {
 	g.mu.Unlock()
 	if len(active) > 0 {
 		slog.Info("restored active streams", "count", len(active))
+		g.changed()
 	}
 	return nil
 }
@@ -296,7 +316,10 @@ func (g *Gateway) setOnlineLocked(s *liveStream, up bool, now time.Time) {
 		s.state, s.since = Live, now
 	case !up && s.state == Live:
 		s.state, s.since = Reconnecting, now
+	default:
+		return
 	}
+	g.changed()
 }
 
 // Reconcile re-synchronizes with MediaMTX's lists: streams go live or start
@@ -340,7 +363,7 @@ func (g *Gateway) Reconcile(ctx context.Context) error {
 		q, _ := url.ParseQuery(ms.Query)
 		g.sessions[ms.ID] = &session{
 			mtxID: ms.ID, streamID: streamID, publish: ms.State == "publish",
-			userID: q.Get("u"), created: ms.Created, confirmed: true,
+			userID: q.Get("u"), tab: q.Get("t"), created: ms.Created, confirmed: true,
 			// After a restart a held viewer looks paused by themselves; resuming
 			// checks access again, so they cannot resume without it.
 			paused: mediamtx.Tracks{Video: ms.VideoPaused, Audio: ms.AudioPaused},
@@ -462,7 +485,9 @@ func (g *Gateway) viewerCountsLocked() map[string]int {
 	return counts
 }
 
+// updatePeaksLocked records peak viewer counts after viewers changed.
 func (g *Gateway) updatePeaksLocked() {
+	g.changed()
 	for id, n := range g.viewerCountsLocked() {
 		if s := g.streams[id]; s != nil && n > s.peak {
 			s.peak = n
@@ -501,6 +526,7 @@ func (g *Gateway) finish(ctx context.Context, e ending) {
 			delete(g.sessions, id)
 		}
 	}
+	g.changed()
 	g.mu.Unlock()
 
 	if err := g.db.EndStream(ctx, store.EndStreamParams{
@@ -580,6 +606,7 @@ func (g *Gateway) forgetSecret(secret string) {
 	for id, sess := range g.sessions {
 		if sess.secret == secret {
 			delete(g.sessions, id)
+			g.changed()
 		}
 	}
 }
@@ -587,10 +614,33 @@ func (g *Gateway) forgetSecret(secret string) {
 func (g *Gateway) kickSession(ctx context.Context, mtxID string) {
 	g.mu.Lock()
 	delete(g.sessions, mtxID)
+	g.changed()
 	g.mu.Unlock()
 	if err := g.mtx.Kick(ctx, mtxID); err != nil {
 		slog.Warn("kick failed", "id", mtxID, "err", err)
 	}
+}
+
+// CloseTabSessions closes the media sessions that userID's browser tab
+// opened, once that tab's realtime connection is gone, so that a viewer who
+// closed the tab without saying so stops counting at once instead of when
+// ICE times out. It returns how many sessions it closed.
+func (g *Gateway) CloseTabSessions(ctx context.Context, userID, tab string) int {
+	if tab == "" {
+		return 0
+	}
+	var ids []string
+	g.mu.Lock()
+	for id, sess := range g.sessions {
+		if !sess.publish && sess.tab == tab && sess.userID == userID {
+			ids = append(ids, id)
+		}
+	}
+	g.mu.Unlock()
+	for _, id := range ids {
+		g.kickSession(ctx, id)
+	}
+	return len(ids)
 }
 
 func (g *Gateway) snapshotLocked(id string, s *liveStream, counts map[string]int) LiveStream {

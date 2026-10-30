@@ -8,7 +8,7 @@ The design and the implementation plan are in [output/md/cupstream-project-overv
 
 | Path | What |
 |---|---|
-| `server/` | Go server: OAuth sign-in and accounts, rooms and access checks (`internal/access`), the WHIP/WHEP media gateway (`internal/gateway`), and later realtime and the Discord bot. SQLite with goose migrations and sqlc queries. |
+| `server/` | Go server: OAuth sign-in and accounts, rooms and access checks (`internal/access`), the WHIP/WHEP media gateway (`internal/gateway`), the realtime WebSocket with presence and chat (`internal/realtime`), and later the Discord bot. SQLite with goose migrations and sqlc queries. |
 | `web/` | Website: React, TypeScript, Vite, Tailwind CSS, TanStack Query, React Router. |
 | `deploy/mediamtx/` | MediaMTX image, built from [our fork](https://github.com/RAdu2005/mediamtx) at a pinned tag, and its configuration. |
 | `deploy/cupstream/` | systemd and OpenRC service files, and `cupstream-deploy`, which CI runs on the production server. |
@@ -40,6 +40,10 @@ The development login needs no setup. To try the real providers locally, create 
 
 - **Google:** in the Google Cloud console, create an OAuth client of type *Web application* with the redirect URI `http://localhost:5173/api/auth/google/callback`. Scopes: `openid` and `profile`.
 - **Discord:** in the Discord developer portal, create an application and add the redirect `http://localhost:5173/api/auth/discord/callback` under OAuth2. Scopes: `identify` and `guilds`.
+
+### Realtime
+
+Each browser tab opens one WebSocket, `GET /api/realtime?tab=<id>`, and subscribes to rooms over it; the messages are the `ClientMessage` and event types in `server/internal/api`. It carries live streams and viewer counts, presence, chat (kept 24 hours) and, for streamers, their viewers' statistics, so the room page does not poll. Only pages on `CUPSTREAM_PUBLIC_URL`'s origin may connect, and the server pings every 30 seconds so Cloudflare does not close idle connections. WHEP requests pass the same tab ID; when a tab's WebSocket has been gone for 15 seconds, the media sessions it opened are closed.
 
 ### Streaming locally
 

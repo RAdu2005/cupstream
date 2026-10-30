@@ -239,3 +239,132 @@ export interface StartStreamResponse {
   whipUrl: string;
   token: string;
 }
+/**
+ * ClientMessage is a message from the browser.
+ */
+export interface ClientMessage {
+  type: 'subscribe' | 'unsubscribe' | 'chat' | 'deleteChat';
+  room: string;
+  /**
+   * Body of a chat message.
+   */
+  body?: string;
+  /**
+   * ID of the chat message to delete.
+   */
+  id?: string;
+  /**
+   * Ref is echoed in an error caused by this message.
+   */
+  ref?: string;
+}
+/**
+ * ChatMessage is a message in a room's chat. CreatedAt is Unix seconds.
+ */
+export interface ChatMessage {
+  id: string;
+  user: User;
+  body: string;
+  createdAt: number /* int64 */;
+}
+/**
+ * Presence is who is in a room right now: signed-in people, and the number
+ * of anonymous visitors (only rooms open to everyone have them).
+ */
+export interface Presence {
+  members: User[];
+  anonymous: number /* int */;
+}
+/**
+ * Subscribed answers a subscription with the room's current state: its live
+ * streams, who is there and the chat of the last 24 hours, oldest first.
+ */
+export interface Subscribed {
+  type: 'subscribed';
+  room: string;
+  streams: Stream[];
+  presence: Presence;
+  chat: ChatMessage[];
+}
+/**
+ * Refused means the subscription was refused or has ended because access
+ * changed. Code is an access reason ("not_allowed", "sign_in_required", …)
+ * or "not_found".
+ */
+export interface Refused {
+  type: 'refused';
+  room: string;
+  code: string;
+  error: string;
+}
+/**
+ * RoomChanged means the room's settings or the viewer's permissions may
+ * have changed; the client fetches the room again.
+ */
+export interface RoomChanged {
+  type: 'roomChanged';
+  room: string;
+}
+export interface PresenceEvent {
+  type: 'presence';
+  room: string;
+  presence: Presence;
+}
+/**
+ * StreamEvent is sent when a stream starts or changes: its state, viewer
+ * count or bitrate.
+ */
+export interface StreamEvent {
+  type: 'stream';
+  room: string;
+  stream: Stream;
+}
+export interface StreamEnded {
+  type: 'streamEnded';
+  room: string;
+  streamId: string;
+}
+/**
+ * ViewerStats summarizes what a stream's viewers receive, from MediaMTX's
+ * counters and their receiver reports. Only the streamer gets it.
+ */
+export interface ViewerStats {
+  type: 'viewerStats';
+  room: string;
+  streamId: string;
+  /**
+   * Viewers receiving media.
+   */
+  viewers: number /* int */;
+  /**
+   * Bitrate sent to all viewers together, in bits per second.
+   */
+  bitrate: number /* int64 */;
+  /**
+   * The worst packet loss (0-1), jitter and round-trip time among them.
+   */
+  maxLossRatio: number /* float64 */;
+  maxJitterMs: number /* float64 */;
+  maxRttMs: number /* float64 */;
+}
+export interface ChatEvent {
+  type: 'chat';
+  room: string;
+  message: ChatMessage;
+}
+export interface ChatDeleted {
+  type: 'chatDeleted';
+  room: string;
+  id: string;
+}
+/**
+ * RealtimeError answers a client message that failed. Code is e.g.
+ * "rate_limited", "sign_in_required", "not_allowed" or "invalid".
+ */
+export interface RealtimeError {
+  type: 'error';
+  room?: string;
+  ref?: string;
+  code: string;
+  error: string;
+}

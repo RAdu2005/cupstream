@@ -35,6 +35,9 @@ const (
 var (
 	reStreamID = regexp.MustCompile(`^[a-z2-7]{16}$`)
 	reSecret   = regexp.MustCompile(`^[0-9a-f-]{36}$`)
+	// ValidTab matches the browser tab IDs of the realtime WebSocket and WHEP
+	// requests (?tab=).
+	ValidTab = regexp.MustCompile(`^[A-Za-z0-9_-]{8,64}$`)
 )
 
 func writeErr(w http.ResponseWriter, status int, code, msg string) {
@@ -140,24 +143,28 @@ func (g *Gateway) Play(w http.ResponseWriter, r *http.Request, userID string) {
 	g.forwardOffer(w, r, ls.Stream, false, userID)
 }
 
-// playQuery reads ?paused=true and ?preview=false from a WHEP request: a
-// pre-warmed session opens paused, and without a preview frame it sends
-// nothing until resumed.
-func playQuery(r *http.Request) (paused, noPreview bool, err error) {
+// playQuery reads ?paused=true, ?preview=false and ?tab=<id> from a WHEP
+// request: a pre-warmed session opens paused, and without a preview frame it
+// sends nothing until resumed. The tab is the browser tab's realtime
+// connection, which the session ends with.
+func playQuery(r *http.Request) (paused, noPreview bool, tab string, err error) {
 	q := r.URL.Query()
+	if tab = q.Get("tab"); tab != "" && !ValidTab.MatchString(tab) {
+		return false, false, "", errors.New("tab is not a valid tab ID")
+	}
 	if v := q.Get("paused"); v != "" {
 		if paused, err = strconv.ParseBool(v); err != nil {
-			return false, false, errors.New("paused is true or false")
+			return false, false, "", errors.New("paused is true or false")
 		}
 	}
 	if v := q.Get("preview"); v != "" {
 		preview, err := strconv.ParseBool(v)
 		if err != nil {
-			return false, false, errors.New("preview is true or false")
+			return false, false, "", errors.New("preview is true or false")
 		}
 		noPreview = !preview
 	}
-	return paused, noPreview, nil
+	return paused, noPreview, tab, nil
 }
 
 // forwardOffer relays a WHIP/WHEP offer to MediaMTX, records the session and
@@ -180,11 +187,16 @@ func (g *Gateway) forwardOffer(w http.ResponseWriter, r *http.Request, rec store
 	kind := "whep"
 	query := url.Values{"u": {userID}}
 	var paused Tracks
+	var tab string
 	if !publish {
-		p, noPreview, err := playQuery(r)
+		p, noPreview, t, err := playQuery(r)
 		if err != nil {
 			writeErr(w, http.StatusBadRequest, "", err.Error())
 			return false
+		}
+		if tab = t; tab != "" {
+			// Kept in MediaMTX's session list, so it survives a restart.
+			query.Set("t", tab)
 		}
 		if p {
 			if !g.Features().Pause {
@@ -244,7 +256,7 @@ func (g *Gateway) forwardOffer(w http.ResponseWriter, r *http.Request, rec store
 		return false
 	}
 
-	g.addSession(&session{mtxID: mtxID, secret: secret, streamID: rec.ID, publish: publish, userID: userID, created: g.now(), paused: paused})
+	g.addSession(&session{mtxID: mtxID, secret: secret, streamID: rec.ID, publish: publish, userID: userID, tab: tab, created: g.now(), paused: paused})
 
 	h := w.Header()
 	h.Set("Content-Type", sdpType)

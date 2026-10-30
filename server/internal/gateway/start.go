@@ -97,6 +97,7 @@ func (g *Gateway) Start(ctx context.Context, req StartRequest) (Started, error) 
 	}
 	g.mu.Lock()
 	g.streams[rec.ID] = &liveStream{rec: rec, state: Starting, since: g.now()}
+	g.changed()
 	g.mu.Unlock()
 	return Started{Stream: rec, Room: room, Token: token}, nil
 }
