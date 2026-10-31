@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"database/sql"
 	"net/http"
 	"strings"
 	"testing"
@@ -182,5 +183,34 @@ func TestDiscordStartMode(t *testing.T) {
 	f.clock = f.clock.Add(obsBlock)
 	if st, err := start(streamer, SourceOBS, false); err != nil || st.Room.Kind != "link" {
 		t.Fatalf("OBS after the block = %+v, %v; want the link room", st.Room, err)
+	}
+}
+
+func TestOBSReconnectsIntoMovedStream(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	v := &fakeVoice{members: map[string]rooms.VoiceMember{"streamer": {InChannel: true, InChannelToStream: true, CanVideo: true}}}
+	f.gw.rooms.SetVoice(v)
+	streamer := f.discordUser(t, "streamer")
+	st, err := f.gw.Start(ctx, StartRequest{User: streamer, Source: SourceOBS})
+	if err != nil || st.Room.Kind != "discord" {
+		t.Fatalf("start = %+v, %v", st.Room, err)
+	}
+	link, err := f.db.GetLinkRoomByOwner(ctx, sql.NullString{String: streamer.ID, Valid: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.gw.MoveStream(ctx, st.Stream.ID, link); err != nil {
+		t.Fatal(err)
+	}
+	// Out of voice, and OBS set to refuse other rooms: its reconnect still
+	// continues the moved stream.
+	v.members["streamer"] = rooms.VoiceMember{}
+	if err := f.db.UpdateUserSettings(ctx, store.UpdateUserSettingsParams{StartMode: "discord_auto", ObsFallback: "refuse", UserID: streamer.ID}); err != nil {
+		t.Fatal(err)
+	}
+	again, err := f.gw.Start(ctx, StartRequest{User: streamer, Source: SourceOBS})
+	if err != nil || !again.Reconnect || again.Room.ID != link.ID || again.Stream.ID != st.Stream.ID {
+		t.Fatalf("reconnect = %+v, %v", again, err)
 	}
 }

@@ -42,3 +42,17 @@ WHERE streams.ended_at IS NULL AND rooms.kind = 'discord';
 
 -- name: IsGuildMember :one
 SELECT EXISTS (SELECT 1 FROM user_guilds WHERE user_id = ? AND guild_id = ?);
+
+-- A pass until a moved stream ends. It replaces a pass that is no longer
+-- valid, but not one that is.
+-- name: CreateStreamPass :exec
+INSERT INTO room_passes (room_id, user_id, stream_id, created_at)
+VALUES (sqlc.arg(room_id), sqlc.arg(user_id), sqlc.arg(stream_id), sqlc.arg(now))
+ON CONFLICT (room_id, user_id) DO UPDATE SET
+    stream_id = excluded.stream_id, invite_id = NULL, can_stream = 0, expires_at = NULL, created_at = excluded.created_at
+WHERE (room_passes.expires_at IS NOT NULL AND room_passes.expires_at <= excluded.created_at)
+   OR room_passes.invite_id IN (SELECT id FROM invites WHERE revoked_at IS NOT NULL)
+   OR room_passes.stream_id IN (SELECT id FROM streams WHERE ended_at IS NOT NULL);
+
+-- name: MoveStream :exec
+UPDATE streams SET room_id = ? WHERE id = ? AND ended_at IS NULL;

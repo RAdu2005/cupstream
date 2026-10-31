@@ -99,6 +99,7 @@ type RoomPass struct {
 	CanStream bool
 	ExpiresAt sql.NullInt64
 	CreatedAt int64
+	StreamID  sql.NullString
 }
 
 type Session struct {

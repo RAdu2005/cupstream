@@ -62,12 +62,15 @@ func (q *Queries) DeleteAllowed(ctx context.Context, arg DeleteAllowedParams) (i
 }
 
 const getActivePass = `-- name: GetActivePass :one
-SELECT room_passes.room_id, room_passes.user_id, room_passes.invite_id, room_passes.can_stream, room_passes.expires_at, room_passes.created_at
+SELECT room_passes.room_id, room_passes.user_id, room_passes.invite_id, room_passes.can_stream, room_passes.expires_at, room_passes.created_at, room_passes.stream_id
 FROM room_passes
 LEFT JOIN invites ON invites.id = room_passes.invite_id
 WHERE room_passes.room_id = ?1 AND room_passes.user_id = ?2
   AND (room_passes.expires_at IS NULL OR room_passes.expires_at > CAST(?3 AS INTEGER))
   AND (invites.id IS NULL OR invites.revoked_at IS NULL)
+  AND (room_passes.stream_id IS NULL OR EXISTS (
+      SELECT 1 FROM streams WHERE streams.id = room_passes.stream_id AND streams.ended_at IS NULL
+  ))
 `
 
 type GetActivePassParams struct {
@@ -87,6 +90,7 @@ func (q *Queries) GetActivePass(ctx context.Context, arg GetActivePassParams) (R
 		&i.CanStream,
 		&i.ExpiresAt,
 		&i.CreatedAt,
+		&i.StreamID,
 	)
 	return i, err
 }

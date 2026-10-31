@@ -531,6 +531,16 @@ func (h *Hub) UserChanged(u api.User) {
 	}
 }
 
+// StreamMoved tells the subscribers of from that a stream moved to another
+// room (slug to).
+func (h *Hub) StreamMoved(from store.Room, streamID, to string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if rs := h.subs[from.ID]; rs != nil {
+		h.broadcastLocked(rs, api.StreamMoved{Type: "streamMoved", Room: from.Slug, StreamID: streamID, ToRoom: to})
+	}
+}
+
 // SendUser sends v to every connection of userID, subscribed to a room or
 // not: messages about them rather than a room.
 func (h *Hub) SendUser(userID string, v any) {

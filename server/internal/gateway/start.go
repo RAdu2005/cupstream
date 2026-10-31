@@ -174,6 +174,11 @@ func (g *Gateway) roomStreamsExcept(roomID string, skip *store.Stream) int {
 }
 
 func (g *Gateway) destination(ctx context.Context, req StartRequest) (store.Room, error) {
+	if cur := g.activeStreamOf(req.User.ID); req.Source == SourceOBS && req.RoomSlug == "" && cur != nil && cur.Source == string(SourceOBS) {
+		// OBS reconnecting continues where its stream is, which may be a
+		// link room it was moved to.
+		return g.db.GetRoom(ctx, cur.RoomID)
+	}
 	if req.RoomSlug != "" {
 		room, err := g.db.GetRoomBySlug(ctx, req.RoomSlug)
 		if errors.Is(err, sql.ErrNoRows) {

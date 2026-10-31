@@ -2,6 +2,7 @@ import { Timer } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { useUserEvents } from '@/api/discord';
+import { MoveStreamButton } from './MoveStreamDialog';
 import type { ServerMessage } from '@/lib/realtime';
 
 type Grace = { roomSlug: string; streamId: string; endsAt: number };
@@ -40,6 +41,9 @@ export function StreamGraceBanner() {
         </span>
       ) : (
         <span>Your stream ended because you left the voice channel.</span>
+      )}
+      {seconds > 0 && (
+        <MoveStreamButton streamId={grace.streamId} className="h-7 bg-white/15 px-2 text-white hover:bg-white/25" />
       )}
       <Link to={`/r/${grace.roomSlug}`} className="font-semibold underline">
         Room

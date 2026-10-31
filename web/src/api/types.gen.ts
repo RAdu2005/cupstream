@@ -718,3 +718,46 @@ export interface StreamGrace {
   streamId: string;
   endsInMs: number /* int64 */;
 }
+/**
+ * StreamViewer is someone watching a stream, as listed to its streamer by
+ * GET /api/streams/{id}/viewers before moving it to their link room.
+ */
+export interface StreamViewer {
+  user: User;
+  /**
+   * Allowed: they may already enter the streamer's link room.
+   */
+  allowed: boolean;
+}
+/**
+ * MoveStreamRequest is the body of POST /api/streams/{id}/move, which moves
+ * the streamer's stream from a Discord room into their link room.
+ */
+export interface MoveStreamRequest {
+  /**
+   * Visibility "everyone" opens the link room to everyone; empty keeps it.
+   */
+  visibility?: 'everyone' | '';
+  /**
+   * Viewers who keep watching: until the stream ends, or always (added to
+   * the allowed list). The others are paused.
+   */
+  viewers: MoveViewer[];
+}
+export interface MoveViewer {
+  userId: string;
+  always?: boolean;
+}
+export interface MoveStreamResponse {
+  roomSlug: string;
+}
+/**
+ * StreamMoved tells a room's subscribers that a stream moved to another
+ * room, where the people its streamer let in can follow it.
+ */
+export interface StreamMoved {
+  type: 'streamMoved';
+  room: string;
+  streamId: string;
+  toRoom: string;
+}
