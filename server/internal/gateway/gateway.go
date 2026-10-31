@@ -768,6 +768,19 @@ func (g *Gateway) RoomStreams(roomID string) []LiveStream {
 	return out
 }
 
+// ActiveStreams lists every active stream, oldest first.
+func (g *Gateway) ActiveStreams() []LiveStream {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	counts := g.viewerCountsLocked()
+	out := make([]LiveStream, 0, len(g.streams))
+	for id, s := range g.streams {
+		out = append(out, g.snapshotLocked(id, s, counts))
+	}
+	slicesSortByStart(out)
+	return out
+}
+
 // Stream returns an active stream.
 func (g *Gateway) Stream(streamID string) (LiveStream, bool) {
 	g.mu.Lock()

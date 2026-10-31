@@ -76,6 +76,11 @@ type Hub struct {
 	wg     sync.WaitGroup     // connection handlers
 	// Open connections (and ones being opened) by user and by address.
 	perUser, perAddr map[string]int
+
+	// Owned by Run: what friends were told about each user's stream, and
+	// the streams already announced (friends.go).
+	friendStreams map[string]friendStream
+	announced     map[string]bool
 }
 
 // roomSubs is a room with subscribers, and what they were last sent.
@@ -124,6 +129,7 @@ func (h *Hub) Run(ctx context.Context) {
 			case <-time.After(coalesceDelay):
 			}
 			h.syncStreams(ctx, false)
+			h.syncFriendStreams(ctx)
 		case <-stats.C:
 			h.syncStreams(ctx, true)
 		case <-recheck.C:
@@ -373,9 +379,11 @@ func (h *Hub) sendViewerStatsLocked(rs *roomSubs) {
 
 // Reevaluate applies a change to room's access rules or settings:
 // subscribers who may no longer watch are unsubscribed and told why, and the
-// others are told to fetch the room again.
+// others are told to fetch the room again. The friends of its streamers are
+// told to fetch their friends' streams again.
 func (h *Hub) Reevaluate(ctx context.Context, room store.Room) {
 	h.reevaluate(ctx, room, true)
+	h.friendRoomChanged(ctx, room)
 }
 
 func (h *Hub) reevaluate(ctx context.Context, room store.Room, changed bool) {

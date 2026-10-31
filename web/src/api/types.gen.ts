@@ -48,16 +48,19 @@ export interface SendFriendRequest {
 }
 /**
  * Notification is something to tell the user about at once, wherever they
- * are on the site: User sent them a friend request or accepted theirs.
+ * are on the site: User sent them a friend request, accepted theirs, or
+ * went live in RoomSlug, a room the user may enter.
  */
 export interface Notification {
   type: 'notification';
-  kind: 'friendRequest' | 'friendAccepted';
+  kind: 'friendRequest' | 'friendAccepted' | 'friendLive';
   user: User;
+  roomSlug?: string; // friendLive
 }
 /**
- * FriendsChanged means the user's friends or requests changed; the client
- * fetches them again.
+ * FriendsChanged means the user's friends, requests or friends' live
+ * streams (GET /api/friends/live) may have changed; the client fetches them
+ * again.
  */
 export interface FriendsChanged {
   type: 'friendsChanged';
@@ -75,6 +78,22 @@ export interface SharedGuild {
   id: string;
   name: string;
   iconUrl?: string;
+}
+/**
+ * LiveFriend is a friend's active stream in a room the user may enter. GET
+ * /api/friends/live lists them, oldest first; Stream.User is the friend.
+ */
+export interface LiveFriend {
+  stream: Stream;
+  room: RoomRef;
+}
+/**
+ * RoomRef names a room without its contents.
+ */
+export interface RoomRef {
+  slug: string;
+  kind: 'link' | 'discord';
+  owner?: User; // link rooms
 }
 
 //////////
