@@ -6,9 +6,12 @@ Rules for coding agents (and a summary for people). The README has the layout, t
 
 - Every task gets its own git worktree and its own branch; T3 Code creates both. Before the first push, rename the branch to `<type>/<short-slug>` (`feat/`, `fix/`, `ops/`, `docs/`, `refactor/`), e.g. `git branch -m fix/room-invite-expiry`.
 - One task, one branch, one pull request. Keep unrelated changes out; if you find something else worth doing, mention it rather than folding it in.
+- Branch from `master`, not from another unmerged branch. Pull requests are squash-merged, so a pull request stacked on another conflicts as soon as its parent merges, and every level of the stack costs the maintainer another round. If your work needs an unmerged pull request, wait for it to merge, or split off the part that doesn't need it.
 - Never commit or push to `master`; a ruleset rejects it anyway. Changes reach `master` only through a pull request whose checks (`server`, `web`, `smoke`) pass.
 - Before opening the pull request, run `make test`, and `make check-generated` if you touched queries, migrations or `server/internal/api`. Open it with `gh pr create`; describe what changed, how you checked it, and anything to do by hand on the server.
-- **Do not merge pull requests and do not enable auto-merge.** The maintainer merges, and merging deploys.
+- **Do not merge pull requests and do not enable auto-merge.** The maintainer merges, and merging deploys; they may turn on auto-merge for a pull request they have reviewed.
+- Keep your pull request mergeable until it merges. When `master` moves and it conflicts or a check fails, rebase onto `master`, run the tests again and push with `--force-with-lease`, without waiting to be told. If your tools can watch a pull request (in T3 Code, `watch_pull_request`), watch yours after opening it and stop once it is merged or closed.
+- All worktrees share the remote-tracking branches, so `origin/master` can move while you work. Fetch, then rebase onto it; never `git reset` against it without checking what it points to now.
 - The main checkout (the repository's first worktree) stays on `master`, clean. `scripts/tidy.sh` (a systemd user timer, or `make tidy`) fast-forwards it and deletes local branches whose pull request was merged; GitHub deletes the remote branch on merge. Do not commit or switch branches there.
 - Tags `v*` publish a GitHub release. Create one only when asked.
 
