@@ -12,6 +12,15 @@ import (
 	"github.com/RAdu2005/cupstream/server/internal/view"
 )
 
+func (s *Server) inviteRoutes(mux *http.ServeMux) {
+	mux.Handle("GET /api/rooms/{slug}/invites", requireUser(s.listInvites))
+	mux.Handle("POST /api/rooms/{slug}/invites", requireUser(s.createInvite))
+	mux.Handle("DELETE /api/rooms/{slug}/invites/{id}", requireUser(s.revokeInvite))
+	// Invite tokens travel in the body, so they stay out of request logs.
+	mux.HandleFunc("POST /api/invites/preview", s.previewInvite)
+	mux.Handle("POST /api/invites/redeem", requireUser(s.redeemInvite))
+}
+
 // The largest use limit an invite link may have.
 const maxInviteUses = 1000
 

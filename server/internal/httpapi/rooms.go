@@ -18,6 +18,33 @@ import (
 
 var timeNow = time.Now
 
+func (s *Server) roomRoutes(mux *http.ServeMux) {
+	mux.Handle("GET /api/home", requireUser(s.home))
+	mux.HandleFunc("GET /api/rooms/{slug}", s.getRoom)
+	mux.Handle("PATCH /api/rooms/{slug}", requireUser(s.updateRoom))
+	mux.Handle("GET /api/rooms/{slug}/allowed", requireUser(s.listAllowed))
+	mux.Handle("PUT /api/rooms/{slug}/allowed/{handle}", requireUser(s.setAllowed))
+	mux.Handle("DELETE /api/rooms/{slug}/allowed/{handle}", requireUser(s.removeAllowed))
+}
+
+func (s *Server) streamRoutes(mux *http.ServeMux) {
+	mux.Handle("POST /api/streams", requireUser(s.startStream))
+	mux.Handle("DELETE /api/streams/{id}", requireUser(s.endStream))
+}
+
+func (s *Server) mediaRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /whip", s.Gateway.HandleOBSPublish)
+	mux.HandleFunc("POST /api/streams/{id}/whip", s.Gateway.HandleTokenPublish)
+	mux.HandleFunc("POST /api/streams/{id}/whep", s.play)
+	mux.HandleFunc("PATCH /api/media/{stream}/{kind}/{secret}", s.Gateway.HandleSession)
+	mux.HandleFunc("DELETE /api/media/{stream}/{kind}/{secret}", s.Gateway.HandleSession)
+	mux.HandleFunc("POST /api/media/{stream}/whep/{secret}/{action}", s.Gateway.HandleSessionControl)
+
+	// Stream thumbnails: the sender uploads them with its publish token.
+	mux.HandleFunc("PUT /api/streams/{id}/thumbnail", s.Gateway.HandleThumbnailUpload)
+	mux.HandleFunc("GET /api/streams/{id}/thumbnail", s.thumbnail)
+}
+
 // loadRoom finds the room in the path, answering 404 if there is none.
 func (s *Server) loadRoom(w http.ResponseWriter, r *http.Request) (store.Room, bool) {
 	room, err := s.DB.GetRoomBySlug(r.Context(), r.PathValue("slug"))

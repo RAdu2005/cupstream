@@ -9,6 +9,13 @@ import (
 	"github.com/RAdu2005/cupstream/server/internal/view"
 )
 
+func (s *Server) banRoutes(mux *http.ServeMux) {
+	mux.Handle("POST /api/rooms/{slug}/kick/{handle}", requireUser(s.kick))
+	mux.Handle("GET /api/rooms/{slug}/bans", requireUser(s.listBans))
+	mux.Handle("PUT /api/rooms/{slug}/bans/{handle}", requireUser(s.ban))
+	mux.Handle("DELETE /api/rooms/{slug}/bans/{handle}", requireUser(s.unban))
+}
+
 // removeFromRoom ends u's sessions and subscriptions in room after a kick
 // or ban, then applies the access change (a co-streamer's stream may end).
 func (s *Server) removeFromRoom(r *http.Request, room store.Room, u store.User, code string) {

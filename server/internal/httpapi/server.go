@@ -67,76 +67,28 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/app/token", s.appToken)
 
 	// Account settings.
-	mux.Handle("GET /api/account", requireUser(s.account))
-	mux.Handle("PATCH /api/account", requireUser(s.updateProfile))
-	mux.Handle("PATCH /api/account/settings", requireUser(s.updateSettings))
-	mux.Handle("DELETE /api/account/identities/{provider}", requireUser(s.unlink))
-	mux.Handle("GET /api/account/sessions", requireUser(s.listSessions))
-	mux.Handle("DELETE /api/account/sessions/{id}", requireUser(s.revokeSession))
-	mux.Handle("GET /api/account/guilds", requireUser(s.listGuilds))
-	mux.Handle("PATCH /api/account/guilds/{id}", requireUser(s.updateGuild))
-	mux.Handle("GET /api/account/merge", requireUser(s.pendingMerge))
-	mux.Handle("POST /api/account/merge", requireUser(s.confirmMerge))
-	mux.Handle("DELETE /api/account/merge", requireUser(s.cancelMerge))
-	mux.Handle("GET /api/account/stream-key", requireUser(s.streamKey))
-	mux.Handle("POST /api/account/stream-key", requireUser(s.regenerateStreamKey))
+	s.accountRoutes(mux)
 
 	// Rooms and streams.
-	mux.Handle("GET /api/home", requireUser(s.home))
-	mux.HandleFunc("GET /api/rooms/{slug}", s.getRoom)
-	mux.Handle("PATCH /api/rooms/{slug}", requireUser(s.updateRoom))
-	mux.Handle("GET /api/rooms/{slug}/allowed", requireUser(s.listAllowed))
-	mux.Handle("PUT /api/rooms/{slug}/allowed/{handle}", requireUser(s.setAllowed))
-	mux.Handle("DELETE /api/rooms/{slug}/allowed/{handle}", requireUser(s.removeAllowed))
-	mux.Handle("GET /api/rooms/{slug}/invites", requireUser(s.listInvites))
-	mux.Handle("POST /api/rooms/{slug}/invites", requireUser(s.createInvite))
-	mux.Handle("DELETE /api/rooms/{slug}/invites/{id}", requireUser(s.revokeInvite))
-	// Invite tokens travel in the body, so they stay out of request logs.
-	mux.HandleFunc("POST /api/invites/preview", s.previewInvite)
-	mux.Handle("POST /api/invites/redeem", requireUser(s.redeemInvite))
-	mux.Handle("POST /api/rooms/{slug}/kick/{handle}", requireUser(s.kick))
-	mux.Handle("GET /api/rooms/{slug}/bans", requireUser(s.listBans))
-	mux.Handle("PUT /api/rooms/{slug}/bans/{handle}", requireUser(s.ban))
-	mux.Handle("DELETE /api/rooms/{slug}/bans/{handle}", requireUser(s.unban))
-	mux.Handle("POST /api/streams", requireUser(s.startStream))
-	mux.Handle("DELETE /api/streams/{id}", requireUser(s.endStream))
+	s.roomRoutes(mux)
+	s.inviteRoutes(mux)
+	s.banRoutes(mux)
+	s.streamRoutes(mux)
 
 	// Friends.
-	mux.Handle("GET /api/friends", requireUser(s.listFriends))
-	mux.Handle("GET /api/friends/lookup", requireUser(s.lookupUser))
-	mux.Handle("POST /api/friends/requests", requireUser(s.sendFriendRequest))
-	mux.Handle("POST /api/friends/requests/{id}/accept", requireUser(s.acceptFriendRequest))
-	mux.Handle("DELETE /api/friends/requests/{id}", requireUser(s.removeFriendRequest))
-	mux.Handle("DELETE /api/friends/{id}", requireUser(s.unfriend))
-	mux.Handle("GET /api/friends/live", requireUser(s.friendsLive))
-	mux.Handle("GET /api/friends/suggestions", requireUser(s.listSuggestions))
-	mux.Handle("DELETE /api/friends/suggestions/{id}", requireUser(s.dismissSuggestion))
-	mux.Handle("GET /api/friends/blocked", requireUser(s.listBlocked))
-	mux.Handle("PUT /api/friends/blocked/{id}", requireUser(s.block))
-	mux.Handle("DELETE /api/friends/blocked/{id}", requireUser(s.unblock))
+	s.friendsRoutes(mux)
 
 	// Bandwidth warnings: the viewer's download test.
-	mux.HandleFunc("GET /api/bandwidth-test", s.bandwidthTest)
+	s.bandwidthRoutes(mux)
 
 	// Discord rooms.
-	mux.Handle("GET /api/rooms/{slug}/discord", requireUser(s.roomDiscord))
-	mux.Handle("GET /api/streams/{id}/viewers", requireUser(s.streamViewers))
-	mux.Handle("POST /api/streams/{id}/move", requireUser(s.moveStream))
+	s.discordRoutes(mux)
 
 	// Admin: live streams, the kill switch and bans.
 	s.adminRoutes(mux)
 
-	// Media signaling.
-	mux.HandleFunc("POST /whip", s.Gateway.HandleOBSPublish)
-	mux.HandleFunc("POST /api/streams/{id}/whip", s.Gateway.HandleTokenPublish)
-	mux.HandleFunc("POST /api/streams/{id}/whep", s.play)
-	mux.HandleFunc("PATCH /api/media/{stream}/{kind}/{secret}", s.Gateway.HandleSession)
-	mux.HandleFunc("DELETE /api/media/{stream}/{kind}/{secret}", s.Gateway.HandleSession)
-	mux.HandleFunc("POST /api/media/{stream}/whep/{secret}/{action}", s.Gateway.HandleSessionControl)
-
-	// Stream thumbnails: the sender uploads them with its publish token.
-	mux.HandleFunc("PUT /api/streams/{id}/thumbnail", s.Gateway.HandleThumbnailUpload)
-	mux.HandleFunc("GET /api/streams/{id}/thumbnail", s.thumbnail)
+	// Media signaling and stream thumbnails.
+	s.mediaRoutes(mux)
 
 	// Realtime: stream events, presence and chat. The hub checks the Origin
 	// header itself, since the cross-origin protection below skips GET.

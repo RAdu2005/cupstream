@@ -27,6 +27,10 @@ var testData = func() []byte {
 
 var testSlots = make(chan struct{}, maxConcurrentTests)
 
+func (s *Server) bandwidthRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/bandwidth-test", s.bandwidthTest)
+}
+
 // bandwidthTest serves GET /api/bandwidth-test?bytes=N: N random bytes
 // (4 MiB by default, at most 32 MiB). The page times them as they arrive
 // and stops reading when it has measured enough.

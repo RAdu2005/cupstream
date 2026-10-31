@@ -12,11 +12,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/RAdu2005/cupstream/server/internal/api"
 	"github.com/RAdu2005/cupstream/server/internal/auth"
 	"github.com/RAdu2005/cupstream/server/internal/capacity"
 	"github.com/RAdu2005/cupstream/server/internal/config"
-	discordbot "github.com/RAdu2005/cupstream/server/internal/discord"
 	"github.com/RAdu2005/cupstream/server/internal/friends"
 	"github.com/RAdu2005/cupstream/server/internal/gateway"
 	"github.com/RAdu2005/cupstream/server/internal/httpapi"
@@ -109,28 +107,7 @@ func run() error {
 			slog.Error("media gateway stopped", "err", err)
 		}
 	}()
-	var names httpapi.DiscordNames
-	if cfg.DiscordBotToken != "" {
-		bot := discordbot.New(db, roomService, cfg.DiscordBotToken)
-		names = bot
-		bot.Reevaluate = func(ctx context.Context, room store.Room) {
-			gw.Reevaluate(ctx, room)
-			hub.Reevaluate(ctx, room)
-		}
-		bot.Streams, bot.PublicURL = gw.RoomStreams, cfg.PublicURL
-		bot.EndStreams = func(ctx context.Context, room store.Room, reason string) {
-			gw.EndRoomStreams(ctx, room.ID, reason)
-		}
-		bot.StreamerGrace = func(ctx context.Context, discordID string, room store.Room, endsAt time.Time) {
-			streamerGrace(ctx, db, gw, hub, discordID, room, endsAt)
-		}
-		roomService.SetVoice(bot)
-		go func() {
-			if err := bot.Run(ctx); err != nil {
-				slog.Error("discord bot stopped", "err", err)
-			}
-		}()
-	}
+	names := startDiscordBot(ctx, cfg, db, roomService, gw, hub)
 	hubDone := make(chan struct{})
 	go func() {
 		defer close(hubDone)
@@ -188,24 +165,6 @@ func run() error {
 		return err
 	}
 	return nil
-}
-
-// streamerGrace tells a streamer who left (or rejoined) a voice channel when
-// their stream in its room ends.
-func streamerGrace(ctx context.Context, db *store.DB, gw *gateway.Gateway, hub *realtime.Hub, discordID string, room store.Room, endsAt time.Time) {
-	u, err := db.GetUserByIdentity(ctx, store.GetUserByIdentityParams{Provider: oauth.Discord, Subject: discordID})
-	if err != nil {
-		return
-	}
-	ls, ok := gw.UserStream(u.ID)
-	if !ok || ls.Stream.RoomID != room.ID {
-		return
-	}
-	msg := api.StreamGrace{Type: "streamGrace", RoomSlug: room.Slug, StreamID: ls.Stream.ID}
-	if !endsAt.IsZero() {
-		msg.EndsInMs = max(1, time.Until(endsAt).Milliseconds())
-	}
-	hub.SendUser(u.ID, msg)
 }
 
 func setupLogging(cfg *config.Config) {
