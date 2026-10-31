@@ -2,6 +2,8 @@ import type {
   ChatDeleted,
   ChatEvent,
   ClientMessage,
+  FriendsChanged,
+  Notification,
   PresenceEvent,
   RealtimeError,
   Refused,
@@ -22,7 +24,9 @@ export type ServerMessage =
   | ViewerStats
   | ChatEvent
   | ChatDeleted
-  | RealtimeError;
+  | RealtimeError
+  | Notification
+  | FriendsChanged;
 
 export type Status = 'connecting' | 'open' | 'closed';
 
@@ -48,6 +52,8 @@ export class RealtimeClient {
 
   private ws: WebSocket | null = null;
   private rooms = new Map<string, Set<Listener>>();
+  /** Listeners to app-wide messages (those without a room). */
+  private listeners = new Set<Listener>();
   private statusListeners = new Set<() => void>();
   private signedOutListeners = new Set<() => void>();
   private retries = 0;
@@ -73,6 +79,16 @@ export class RealtimeClient {
         this.send({ type: 'unsubscribe', room });
       }
     };
+  }
+
+  /**
+   * Listens to app-wide messages, such as notifications, keeping the socket
+   * open while anyone listens.
+   */
+  listen(listener: Listener): () => void {
+    this.listeners.add(listener);
+    this.connect();
+    return () => void this.listeners.delete(listener);
   }
 
   /** Sends a message if the socket is open, and reports whether it did. */
@@ -101,6 +117,7 @@ export class RealtimeClient {
   /** Closes the socket and forgets every listener (tests). */
   reset() {
     this.rooms.clear();
+    this.listeners.clear();
     this.statusListeners.clear();
     this.signedOutListeners.clear();
     this.close();
@@ -134,7 +151,8 @@ export class RealtimeClient {
       } catch {
         return;
       }
-      const targets = msg.room ? [this.rooms.get(msg.room)] : [...this.rooms.values()];
+      const room = 'room' in msg ? msg.room : undefined;
+      const targets = room ? [this.rooms.get(room)] : [...this.rooms.values(), this.listeners];
       for (const set of targets) for (const fn of set ?? []) fn(msg);
     };
     ws.onclose = (ev) => {
@@ -142,7 +160,7 @@ export class RealtimeClient {
       this.ws = null;
       this.setStatus('closed');
       if (ev.code === SIGNED_OUT) for (const fn of this.signedOutListeners) fn();
-      if (this.rooms.size === 0) return;
+      if (!this.wanted()) return;
       // 1, 2, 4 … 30 seconds, with jitter so a restarted server is not hit
       // by every tab at once.
       const delay = Math.min(30_000, 1000 * 2 ** this.retries) * (0.75 + Math.random() / 2);
@@ -169,7 +187,12 @@ export class RealtimeClient {
   private restart() {
     this.close();
     this.retries = 0;
-    if (this.rooms.size > 0) this.connect();
+    if (this.wanted()) this.connect();
+  }
+
+  /** Whether anyone needs the socket. */
+  private wanted() {
+    return this.rooms.size > 0 || this.listeners.size > 0;
   }
 }
 

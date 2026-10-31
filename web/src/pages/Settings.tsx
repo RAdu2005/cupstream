@@ -18,6 +18,7 @@ import {
 import { useAuthProviders, useMe } from '@/api/auth';
 import { useAllowed, useBans, useRemoveAllowed, useRoom, useSetAllowed, useUnban, useUpdateRoom } from '@/api/rooms';
 import type { Account, AuthProvider, Visibility } from '@/api/types.gen';
+import { AllowFriends } from '@/components/AllowFriends';
 import { Button, Card, Input } from '@/components/ui';
 import { oauthErrors, providerLabel, visibilityLabel } from '@/lib/labels';
 
@@ -158,7 +159,7 @@ function MergePrompt({ checkPending, onDone }: { checkPending: boolean; onDone: 
         <strong>
           {m.other.displayName} (@{m.other.handle})
         </strong>
-        . Merging moves its sign-in methods and room memberships into this account and deletes it, along with its room
+        . Merging moves its sign-in methods, room memberships and friends into this account and deletes it, along with its room
         and stream key.
       </p>
       <div className="flex gap-2">
@@ -323,6 +324,7 @@ function RoomSettings({ slug }: { slug: string }) {
             Allow
           </Button>
         </form>
+        <AllowFriends slug={slug} />
         {(setAllowed.error || remove.error) && (
           <p className="text-sm text-danger">{(setAllowed.error ?? remove.error)?.message}</p>
         )}

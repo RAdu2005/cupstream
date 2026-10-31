@@ -1,6 +1,7 @@
 import type { RouteObject } from 'react-router';
 import { AppShell } from './components/AppShell';
 import { AppAuthorize } from './pages/AppAuthorize';
+import { Friends } from './pages/Friends';
 import { Home } from './pages/Home';
 import { Invite } from './pages/Invite';
 import { Privacy, Terms } from './pages/Legal';
@@ -17,6 +18,7 @@ export const routes: RouteObject[] = [
       { path: 'login', element: <Login /> },
       { path: 'app/authorize', element: <AppAuthorize /> },
       { path: 'settings', element: <Settings /> },
+      { path: 'friends', element: <Friends /> },
       { path: 'r/:slug', element: <Room /> },
       { path: 'i/:token', element: <Invite /> },
       { path: 'privacy', element: <Privacy /> },

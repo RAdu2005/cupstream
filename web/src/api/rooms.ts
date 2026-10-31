@@ -24,10 +24,11 @@ export function useUpdateRoom(slug: string) {
   });
 }
 
-export function useAllowed(slug: string) {
+export function useAllowed(slug: string, enabled = true) {
   return useQuery({
     queryKey: ['room', slug, 'allowed'],
     queryFn: () => api<AllowedEntry[]>(`/api/rooms/${slug}/allowed`),
+    enabled,
   });
 }
 
