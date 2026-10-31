@@ -167,7 +167,13 @@ impl Candidate {
     /// scaled to `height` (keeping the aspect ratio) when given. Its last
     /// element is the capsfilter "size".
     pub fn upload_description(&self, height: Option<u32>) -> String {
-        let size = height.map(|h| format!(",height={h}")).unwrap_or_default();
+        // Square pixels: given only a height, scalers otherwise keep the
+        // width and change the pixel aspect ratio, which WebRTC does not
+        // carry, so viewers would see the picture squashed.
+        let size = match height {
+            Some(h) => format!(",height={h},pixel-aspect-ratio=1/1"),
+            None => ",pixel-aspect-ratio=1/1".into(),
+        };
         match self.upload {
             // A description cannot end with bare caps, hence capsfilter.
             Upload::System => {
