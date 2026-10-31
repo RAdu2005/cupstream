@@ -39,6 +39,18 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) er
 	return err
 }
 
+const deleteAllUserSessions = `-- name: DeleteAllUserSessions :execrows
+DELETE FROM sessions WHERE user_id = ?
+`
+
+func (q *Queries) DeleteAllUserSessions(ctx context.Context, userID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteAllUserSessions, userID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteExpiredSessions = `-- name: DeleteExpiredSessions :execrows
 DELETE FROM sessions WHERE expires_at <= ?
 `
@@ -78,10 +90,10 @@ func (q *Queries) DeleteUserSession(ctx context.Context, arg DeleteUserSessionPa
 }
 
 const getSessionByTokenHash = `-- name: GetSessionByTokenHash :one
-SELECT sessions.id, sessions.token_hash, sessions.user_id, sessions.kind, sessions.device_name, sessions.created_at, sessions.expires_at, sessions.last_seen_at, users.id, users.handle, users.display_name, users.avatar_url, users.created_at
+SELECT sessions.id, sessions.token_hash, sessions.user_id, sessions.kind, sessions.device_name, sessions.created_at, sessions.expires_at, sessions.last_seen_at, users.id, users.handle, users.display_name, users.avatar_url, users.created_at, users.banned_at
 FROM sessions
 JOIN users ON users.id = sessions.user_id
-WHERE sessions.token_hash = ? AND sessions.expires_at > ?
+WHERE sessions.token_hash = ? AND sessions.expires_at > ? AND users.banned_at IS NULL
 `
 
 type GetSessionByTokenHashParams struct {
@@ -111,6 +123,7 @@ func (q *Queries) GetSessionByTokenHash(ctx context.Context, arg GetSessionByTok
 		&i.User.DisplayName,
 		&i.User.AvatarURL,
 		&i.User.CreatedAt,
+		&i.User.BannedAt,
 	)
 	return i, err
 }

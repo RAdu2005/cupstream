@@ -193,7 +193,7 @@ func (q *Queries) IsBanned(ctx context.Context, arg IsBannedParams) (bool, error
 }
 
 const listAllowed = `-- name: ListAllowed :many
-SELECT users.id, users.handle, users.display_name, users.avatar_url, users.created_at, room_allowed.can_stream
+SELECT users.id, users.handle, users.display_name, users.avatar_url, users.created_at, users.banned_at, room_allowed.can_stream
 FROM room_allowed
 JOIN users ON users.id = room_allowed.user_id
 WHERE room_allowed.room_id = ?
@@ -220,6 +220,7 @@ func (q *Queries) ListAllowed(ctx context.Context, roomID string) ([]ListAllowed
 			&i.User.DisplayName,
 			&i.User.AvatarURL,
 			&i.User.CreatedAt,
+			&i.User.BannedAt,
 			&i.CanStream,
 		); err != nil {
 			return nil, err

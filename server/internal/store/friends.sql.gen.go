@@ -175,7 +175,7 @@ func (q *Queries) IsBlocked(ctx context.Context, arg IsBlockedParams) (bool, err
 }
 
 const listBlocked = `-- name: ListBlocked :many
-SELECT users.id, users.handle, users.display_name, users.avatar_url, users.created_at
+SELECT users.id, users.handle, users.display_name, users.avatar_url, users.created_at, users.banned_at
 FROM user_blocks
 JOIN users ON users.id = user_blocks.blocked_id
 WHERE user_blocks.user_id = ?
@@ -197,6 +197,7 @@ func (q *Queries) ListBlocked(ctx context.Context, userID string) ([]User, error
 			&i.DisplayName,
 			&i.AvatarURL,
 			&i.CreatedAt,
+			&i.BannedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -241,7 +242,7 @@ func (q *Queries) ListFriendIDs(ctx context.Context, userID string) ([]string, e
 }
 
 const listFriendships = `-- name: ListFriendships :many
-SELECT users.id, users.handle, users.display_name, users.avatar_url, users.created_at, friendships.status, friendships.requested_by, friendships.created_at, friendships.accepted_at
+SELECT users.id, users.handle, users.display_name, users.avatar_url, users.created_at, users.banned_at, friendships.status, friendships.requested_by, friendships.created_at, friendships.accepted_at
 FROM friendships
 JOIN users ON users.id = CASE WHEN friendships.user_a = ?1 THEN friendships.user_b ELSE friendships.user_a END
 WHERE friendships.user_a = ?1 OR friendships.user_b = ?1
@@ -272,6 +273,7 @@ func (q *Queries) ListFriendships(ctx context.Context, userID string) ([]ListFri
 			&i.User.DisplayName,
 			&i.User.AvatarURL,
 			&i.User.CreatedAt,
+			&i.User.BannedAt,
 			&i.Status,
 			&i.RequestedBy,
 			&i.CreatedAt,
@@ -352,7 +354,7 @@ func (q *Queries) ListSharedGuilds(ctx context.Context, arg ListSharedGuildsPara
 }
 
 const listSuggestions = `-- name: ListSuggestions :many
-SELECT users.id, users.handle, users.display_name, users.avatar_url, users.created_at, CAST(COUNT(*) AS INTEGER) AS shared
+SELECT users.id, users.handle, users.display_name, users.avatar_url, users.created_at, users.banned_at, CAST(COUNT(*) AS INTEGER) AS shared
 FROM user_guilds AS mine
 JOIN user_guilds AS theirs ON theirs.guild_id = mine.guild_id AND theirs.user_id <> mine.user_id
 JOIN users ON users.id = theirs.user_id
@@ -405,6 +407,7 @@ func (q *Queries) ListSuggestions(ctx context.Context, arg ListSuggestionsParams
 			&i.User.DisplayName,
 			&i.User.AvatarURL,
 			&i.User.CreatedAt,
+			&i.User.BannedAt,
 			&i.Shared,
 		); err != nil {
 			return nil, err

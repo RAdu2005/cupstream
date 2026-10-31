@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
@@ -63,6 +64,10 @@ func (s *Server) devLogin(w http.ResponseWriter, r *http.Request) {
 	user, _, err := s.Accounts.SignIn(r.Context(), oauth.Identity{
 		Provider: auth.ProviderDev, Subject: handle, Username: handle, DisplayName: handle,
 	})
+	if errors.Is(err, auth.ErrBanned) {
+		writeErrorCode(w, http.StatusForbidden, "banned", err.Error())
+		return
+	}
 	if err == nil {
 		err = s.switchSession(w, r, user.ID)
 	}

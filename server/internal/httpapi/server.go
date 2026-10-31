@@ -123,6 +123,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/streams/{id}/viewers", requireUser(s.streamViewers))
 	mux.Handle("POST /api/streams/{id}/move", requireUser(s.moveStream))
 
+	// Admin: live streams, the kill switch and bans.
+	s.adminRoutes(mux)
+
 	// Media signaling.
 	mux.HandleFunc("POST /whip", s.Gateway.HandleOBSPublish)
 	mux.HandleFunc("POST /api/streams/{id}/whip", s.Gateway.HandleTokenPublish)
@@ -178,7 +181,12 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) me(w http.ResponseWriter, r *http.Request, cur auth.Current) {
-	writeJSON(w, http.StatusOK, api.Me{User: view.User(cur.User)})
+	admin, err := s.isAdmin(r.Context(), cur.User.ID)
+	if err != nil {
+		internalError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, api.Me{User: view.User(cur.User), Admin: admin})
 }
 
 // userID returns the signed-in user's ID, or "".

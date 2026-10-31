@@ -173,6 +173,10 @@ func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			err = s.switchSession(w, r, user.ID)
 		}
+		if errors.Is(err, auth.ErrBanned) {
+			fail("/login", "banned")
+			return
+		}
 		if err != nil {
 			slog.ErrorContext(r.Context(), "sign-in failed", "err", err)
 			fail("/login", "internal")
@@ -203,6 +207,8 @@ func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, withQuery("/settings", "merge", "1"), http.StatusFound)
 	case errors.Is(err, auth.ErrProviderLinked):
 		fail("/settings", "provider_linked")
+	case errors.Is(err, auth.ErrBanned):
+		fail("/settings", "banned")
 	case err != nil:
 		slog.ErrorContext(r.Context(), "linking failed", "err", err)
 		fail("/settings", "internal")
@@ -242,7 +248,10 @@ func (s *Server) confirmMerge(w http.ResponseWriter, r *http.Request, cur auth.C
 	}
 	s.setCookie(w, mergeCookie, "", 0)
 	s.Gateway.EndUserStreams(r.Context(), m.OtherID, gateway.EndAccountMerged)
-	if err := s.Accounts.Merge(r.Context(), cur.User.ID, m.OtherID); err != nil {
+	if err := s.Accounts.Merge(r.Context(), cur.User.ID, m.OtherID); errors.Is(err, auth.ErrBanned) {
+		writeErrorCode(w, http.StatusForbidden, "banned", "the other account is banned")
+		return
+	} else if err != nil {
 		internalError(w, r, err)
 		return
 	}

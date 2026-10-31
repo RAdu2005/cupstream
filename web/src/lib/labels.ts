@@ -20,5 +20,6 @@ export const oauthErrors: Record<string, string> = {
   provider_unavailable: 'This sign-in method is unavailable right now.',
   session_changed: 'You were signed out while linking. Sign in and try again.',
   provider_linked: 'An account of this provider is already linked. Unlink it first.',
+  banned: 'This account is banned from CupStream.',
   internal: 'Something went wrong on our side. Please try again.',
 };

@@ -88,6 +88,23 @@ Requests are rate-limited per client address (behind the tunnel, the visitor's a
 
 The server's network connection is the limit: 1 Gbps carries about 125 viewers of an 8 Mbps stream. The server reads the outgoing traffic of the physical network interfaces every second (from `/sys/class/net`, since the service cannot see `/proc/net`), and while a new viewer would take it above `CUPSTREAM_EGRESS_LIMIT_MBPS` (800 by default) it refuses them with 503 and the code `server_full`: opening a session that plays at once, and resuming the video of a paused one. Pre-warming (opening paused) is always allowed. An admitted viewer counts with their stream's bitrate (8 Mbps when not known yet) until the counters show it, so a burst of viewers cannot all slip in at once. The startup log says which interfaces are measured.
 
+### Admins
+
+Admins are listed by sign-in identity in `CUPSTREAM_ADMINS` (`discord:<user ID>`, `google:<sub>`; `dev:<handle>` with the development login), never by handle, which users can change. They get a shield icon in the header that leads to `/admin`, which shows:
+
+- every live stream with its room, viewers, and the bitrate it receives and sends, plus totals
+- an **End** button for each stream (the kill switch)
+- platform bans
+
+Banning a user:
+
+- revokes all their sessions
+- ends their streams (end reason `user_banned`)
+- closes their viewer sessions and WebSockets
+- refuses their sign-in, streaming and OBS key
+
+Linking or merging a banned account into another is refused too. Admins can't be banned; take them out of `CUPSTREAM_ADMINS` first. Signed-out watching of rooms open to everyone can't be prevented. Bans and ended streams are logged with the admin's user ID.
+
 ## MediaMTX build
 
 MediaMTX runs from the fork [RAdu2005/mediamtx](https://github.com/RAdu2005/mediamtx): an upstream release plus the WHEP pause/resume pull request [bluenviron/mediamtx#6308](https://github.com/bluenviron/mediamtx/pull/6308) and our changes (overview, section 3.2). The tag is pinned in `deploy/mediamtx/Dockerfile` and `compose.yaml`; the fork's `CUPSTREAM.md` describes how to upgrade.

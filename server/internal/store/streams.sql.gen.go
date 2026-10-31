@@ -132,7 +132,7 @@ func (q *Queries) GetStream(ctx context.Context, id string) (Stream, error) {
 }
 
 const getUserByStreamKey = `-- name: GetUserByStreamKey :one
-SELECT users.id, users.handle, users.display_name, users.avatar_url, users.created_at
+SELECT users.id, users.handle, users.display_name, users.avatar_url, users.created_at, users.banned_at
 FROM stream_keys
 JOIN users ON users.id = stream_keys.user_id
 WHERE stream_keys.key_hash = ? AND stream_keys.revoked_at IS NULL
@@ -147,6 +147,7 @@ func (q *Queries) GetUserByStreamKey(ctx context.Context, keyHash []byte) (User,
 		&i.DisplayName,
 		&i.AvatarURL,
 		&i.CreatedAt,
+		&i.BannedAt,
 	)
 	return i, err
 }

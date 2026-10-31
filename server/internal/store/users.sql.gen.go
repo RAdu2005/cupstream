@@ -37,7 +37,7 @@ func (q *Queries) CreateIdentity(ctx context.Context, arg CreateIdentityParams) 
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (id, handle, display_name, avatar_url, created_at)
 VALUES (?, ?, ?, ?, ?)
-RETURNING id, handle, display_name, avatar_url, created_at
+RETURNING id, handle, display_name, avatar_url, created_at, banned_at
 `
 
 type CreateUserParams struct {
@@ -63,6 +63,7 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.DisplayName,
 		&i.AvatarURL,
 		&i.CreatedAt,
+		&i.BannedAt,
 	)
 	return i, err
 }
@@ -125,7 +126,7 @@ func (q *Queries) GetIdentity(ctx context.Context, arg GetIdentityParams) (Ident
 }
 
 const getUser = `-- name: GetUser :one
-SELECT id, handle, display_name, avatar_url, created_at FROM users WHERE id = ?
+SELECT id, handle, display_name, avatar_url, created_at, banned_at FROM users WHERE id = ?
 `
 
 func (q *Queries) GetUser(ctx context.Context, id string) (User, error) {
@@ -137,12 +138,13 @@ func (q *Queries) GetUser(ctx context.Context, id string) (User, error) {
 		&i.DisplayName,
 		&i.AvatarURL,
 		&i.CreatedAt,
+		&i.BannedAt,
 	)
 	return i, err
 }
 
 const getUserByHandle = `-- name: GetUserByHandle :one
-SELECT id, handle, display_name, avatar_url, created_at FROM users WHERE handle = ?
+SELECT id, handle, display_name, avatar_url, created_at, banned_at FROM users WHERE handle = ?
 `
 
 func (q *Queries) GetUserByHandle(ctx context.Context, handle string) (User, error) {
@@ -154,12 +156,13 @@ func (q *Queries) GetUserByHandle(ctx context.Context, handle string) (User, err
 		&i.DisplayName,
 		&i.AvatarURL,
 		&i.CreatedAt,
+		&i.BannedAt,
 	)
 	return i, err
 }
 
 const getUserByIdentity = `-- name: GetUserByIdentity :one
-SELECT users.id, users.handle, users.display_name, users.avatar_url, users.created_at
+SELECT users.id, users.handle, users.display_name, users.avatar_url, users.created_at, users.banned_at
 FROM identities
 JOIN users ON users.id = identities.user_id
 WHERE identities.provider = ? AND identities.subject = ?
@@ -179,6 +182,7 @@ func (q *Queries) GetUserByIdentity(ctx context.Context, arg GetUserByIdentityPa
 		&i.DisplayName,
 		&i.AvatarURL,
 		&i.CreatedAt,
+		&i.BannedAt,
 	)
 	return i, err
 }
@@ -203,6 +207,40 @@ func (q *Queries) HandleTaken(ctx context.Context, handle string) (bool, error) 
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const listBannedUsers = `-- name: ListBannedUsers :many
+SELECT id, handle, display_name, avatar_url, created_at, banned_at FROM users WHERE banned_at IS NOT NULL ORDER BY banned_at DESC
+`
+
+func (q *Queries) ListBannedUsers(ctx context.Context) ([]User, error) {
+	rows, err := q.db.QueryContext(ctx, listBannedUsers)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []User{}
+	for rows.Next() {
+		var i User
+		if err := rows.Scan(
+			&i.ID,
+			&i.Handle,
+			&i.DisplayName,
+			&i.AvatarURL,
+			&i.CreatedAt,
+			&i.BannedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listIdentities = `-- name: ListIdentities :many
@@ -267,6 +305,20 @@ func (q *Queries) SetAvatarIfEmpty(ctx context.Context, arg SetAvatarIfEmptyPara
 	return err
 }
 
+const setUserBanned = `-- name: SetUserBanned :exec
+UPDATE users SET banned_at = ? WHERE id = ?
+`
+
+type SetUserBannedParams struct {
+	BannedAt sql.NullInt64
+	ID       string
+}
+
+func (q *Queries) SetUserBanned(ctx context.Context, arg SetUserBannedParams) error {
+	_, err := q.db.ExecContext(ctx, setUserBanned, arg.BannedAt, arg.ID)
+	return err
+}
+
 const updateIdentityUsername = `-- name: UpdateIdentityUsername :exec
 UPDATE identities SET username = ? WHERE provider = ? AND subject = ?
 `
@@ -284,7 +336,7 @@ func (q *Queries) UpdateIdentityUsername(ctx context.Context, arg UpdateIdentity
 
 const updateProfile = `-- name: UpdateProfile :one
 UPDATE users SET handle = ?, display_name = ? WHERE id = ?
-RETURNING id, handle, display_name, avatar_url, created_at
+RETURNING id, handle, display_name, avatar_url, created_at, banned_at
 `
 
 type UpdateProfileParams struct {
@@ -302,6 +354,7 @@ func (q *Queries) UpdateProfile(ctx context.Context, arg UpdateProfileParams) (U
 		&i.DisplayName,
 		&i.AvatarURL,
 		&i.CreatedAt,
+		&i.BannedAt,
 	)
 	return i, err
 }

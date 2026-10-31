@@ -56,7 +56,7 @@ func (q *Queries) InsertBan(ctx context.Context, arg InsertBanParams) error {
 }
 
 const listBans = `-- name: ListBans :many
-SELECT users.id, users.handle, users.display_name, users.avatar_url, users.created_at, room_bans.created_at AS banned_at
+SELECT users.id, users.handle, users.display_name, users.avatar_url, users.created_at, users.banned_at, room_bans.created_at AS banned_at
 FROM room_bans
 JOIN users ON users.id = room_bans.user_id
 WHERE room_bans.room_id = ?
@@ -83,6 +83,7 @@ func (q *Queries) ListBans(ctx context.Context, roomID string) ([]ListBansRow, e
 			&i.User.DisplayName,
 			&i.User.AvatarURL,
 			&i.User.CreatedAt,
+			&i.User.BannedAt,
 			&i.BannedAt,
 		); err != nil {
 			return nil, err

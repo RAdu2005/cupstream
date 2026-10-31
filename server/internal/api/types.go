@@ -14,6 +14,8 @@ type User struct {
 // Me is the response of GET /api/me.
 type Me struct {
 	User User `json:"user"`
+	// Admin is set for admins (CUPSTREAM_ADMINS), who see the admin page.
+	Admin bool `json:"admin,omitempty"`
 }
 
 // AuthProviders is the response of GET /api/auth/providers: the sign-in

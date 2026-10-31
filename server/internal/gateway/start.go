@@ -106,6 +106,9 @@ type Started struct {
 // Start creates a stream, or returns the user's current OBS stream when OBS
 // reconnects.
 func (g *Gateway) Start(ctx context.Context, req StartRequest) (Started, error) {
+	if req.User.BannedAt.Valid {
+		return Started{}, &DestinationError{Code: CodeBanned, Message: "your account is banned"}
+	}
 	room, err := g.destination(ctx, req)
 	if err != nil {
 		return Started{}, err
