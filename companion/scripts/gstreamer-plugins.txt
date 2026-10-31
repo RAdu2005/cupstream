@@ -1,0 +1,44 @@
+# GStreamer plugins in the Windows installer: only what the app's pipelines
+# use (see REQUIRED_ELEMENTS in media/src/lib.rs and the encoders in
+# media/src/encoder.rs). gstreamer-bundle.ps1 copies these from a GStreamer
+# MSVC installation, with the DLLs they and the app need.
+
+# Core elements, appsrc/appsink, test sources (cupstream-cli check, --source test)
+coreelements
+app
+videotestsrc
+audiotestsrc
+
+# Conversion and timing
+videoconvertscale
+videorate
+audioconvert
+audioresample
+
+# Capture: screens and windows (Windows.Graphics.Capture), audio (WASAPI)
+d3d11
+wasapi2
+
+# Encoders, in the app's order of preference: NVENC, AMD AMF, Quick Sync,
+# Media Foundation, x264, OpenH264; Opus for audio
+nvcodec
+amfcodec
+qsv
+mediafoundation
+x264
+openh264
+opus
+
+# H.264 and AV1 parsers, errorignore (used by whipclientsink)
+videoparsersbad
+debugutilsbad
+
+# WebRTC: webrtcbin, ICE, DTLS, SRTP, RTP payloaders and the session manager
+webrtc
+nice
+dtls
+srtp
+rtp
+rtpmanager
+sdpelem
+pbtypes

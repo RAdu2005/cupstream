@@ -37,6 +37,8 @@ enum Command {
     SignOut,
     /// List the encoders for this platform and whether they work here.
     Encoders,
+    /// Check that every GStreamer element the app uses is available.
+    Check,
     /// Show which applications' audio would be captured, until Ctrl+C.
     Audio {
         /// except-discord, all, or app:<name>.
@@ -111,8 +113,14 @@ enum CodecArg {
     Av1,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
+    // Before the async runtime starts its threads: it sets environment
+    // variables.
+    let bundled = cupstream_media::use_bundled_gstreamer();
+    tokio::runtime::Runtime::new()?.block_on(run(bundled))
+}
+
+async fn run(bundled: bool) -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -124,6 +132,27 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         Command::SignIn => sign_in(&cli.server).await,
         Command::SignOut => sign_out(&cli.server).await,
+        Command::Check => {
+            cupstream_media::init()?;
+            println!(
+                "{} ({})",
+                cupstream_media::gst::version_string(),
+                if bundled {
+                    "bundled with the app"
+                } else {
+                    "the system's"
+                }
+            );
+            let missing = cupstream_media::missing_elements();
+            if !missing.is_empty() {
+                bail!("missing GStreamer elements: {}", missing.join(", "));
+            }
+            println!(
+                "all {} elements the app uses are available",
+                cupstream_media::REQUIRED_ELEMENTS.len()
+            );
+            Ok(())
+        }
         Command::Encoders => {
             cupstream_media::init()?;
             for (c, result) in encoder::report() {
