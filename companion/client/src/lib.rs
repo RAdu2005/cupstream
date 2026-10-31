@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 /// A user as the API describes them.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct User {
     pub id: String,
@@ -37,6 +37,16 @@ impl std::fmt::Display for ApiError {
 }
 
 impl std::error::Error for ApiError {}
+
+/// The user's settings as the app shows them.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Account {
+    pub start_mode: String,
+    pub obs_fallback: String,
+    pub room_slug: String,
+    pub visibility: String,
+}
 
 /// Where and how to publish: a WHIP endpoint and its Bearer token.
 #[derive(Clone, Debug)]
@@ -209,6 +219,64 @@ impl Client {
             stream_id: None,
             room_slug: room.map(Into::into),
         }
+    }
+
+    /// The user's server-side settings that the app shows: where new
+    /// streams go, and their link room and its visibility.
+    pub async fn account(&self) -> anyhow::Result<Account> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Resp {
+            settings: Settings,
+            room_slug: String,
+        }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Settings {
+            start_mode: String,
+            obs_fallback: String,
+        }
+        #[derive(Deserialize)]
+        struct Room {
+            visibility: Option<String>,
+        }
+        let a: Resp = self.send(self.http.get(self.url("/api/account"))).await?;
+        let room: Room = self
+            .send(
+                self.http
+                    .get(self.url(&format!("/api/rooms/{}", a.room_slug))),
+            )
+            .await?;
+        Ok(Account {
+            start_mode: a.settings.start_mode,
+            obs_fallback: a.settings.obs_fallback,
+            room_slug: a.room_slug,
+            visibility: room.visibility.unwrap_or_default(),
+        })
+    }
+
+    /// Sets where new streams go ("discord_auto" or "link"), keeping the
+    /// OBS fallback the server requires alongside it.
+    pub async fn set_start_mode(&self, account: &Account, mode: &str) -> anyhow::Result<()> {
+        self.send::<serde_json::Value>(
+            self.http.patch(self.url("/api/account/settings")).json(
+                &serde_json::json!({ "startMode": mode, "obsFallback": account.obs_fallback }),
+            ),
+        )
+        .await
+        .map(|_| ())
+    }
+
+    /// Sets who may watch the user's link room: "everyone", "signed_in" or
+    /// "invite_only".
+    pub async fn set_visibility(&self, room_slug: &str, visibility: &str) -> anyhow::Result<()> {
+        self.send::<serde_json::Value>(
+            self.http
+                .patch(self.url(&format!("/api/rooms/{room_slug}")))
+                .json(&serde_json::json!({ "visibility": visibility })),
+        )
+        .await
+        .map(|_| ())
     }
 
     /// The IDs of a room's live streams, oldest first.

@@ -1,0 +1,33 @@
+@import 'tailwindcss';
+/* The website's components, so Tailwind generates their classes. */
+@source '../../../web/src/components/ui.tsx';
+
+/* The website's theme (web/src/index.css); keep them in sync. */
+@theme {
+  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+
+  --color-bg: #0e0e10;
+  --color-surface: #18181b;
+  --color-raised: #232328;
+  --color-line: #2e2e35;
+  --color-fg: #efeff1;
+  --color-muted: #a1a1aa;
+  --color-accent: #a970ff;
+  --color-accent-strong: #9147ff;
+  --color-danger: #f87171;
+  --color-live: #eb0400;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-bg font-sans text-fg antialiased select-none;
+  }
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-accent;
+  }
+}

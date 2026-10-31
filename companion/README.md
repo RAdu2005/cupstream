@@ -7,6 +7,7 @@ The desktop app's Rust workspace. For now it holds the media pipeline and a comm
 | `client/` | The CupStream API as the app uses it: signing in through the system browser (loopback redirect with PKCE), starting and ending streams. |
 | `media/` | Capture (xdg-desktop-portal and PipeWire on Wayland, `ximagesrc` on X11, `d3d11screencapturesrc` on Windows), encoder choice with fallbacks, audio without Discord, publishing with `whipclientsink` and a WHEP check. `whipclientsink` and `whepclientsrc` are compiled in from `gst-plugin-webrtc`, so only the system's standard GStreamer plugins are needed. |
 | `cli/` | `cupstream-cli`, the prototype. |
+| `app/` | The Tauri 2 app: `src-tauri/` (Rust: tray, sign-in, realtime, going live) and `src/` (the window, React, reusing the website's components). |
 
 ## Building
 
@@ -32,6 +33,21 @@ cupstream-cli --server http://localhost:5173 watch --room <slug>  # decode what 
 ```
 
 `publish` options: `--source portal|x11|x11:<xid>|monitor:<n>|window:<hwnd>|test`, `--encoder <element>`, `--codec h264|av1`, `--bitrate <kbit/s>`, `--fps`, `--height`, `--audio except-discord|all|app:<name>|test|none`, `--room <slug>`, `--replace`, `--pick` (ask for the screen again instead of reusing the portal's last choice), `--duration <s>`. The app session token and the portal's restore token are kept in `~/.config/cupstream-cli/` (`%APPDATA%\cupstream-cli` on Windows); the app proper will keep its token in the system keychain.
+
+## The app
+
+```sh
+cd app && npm ci
+CUPSTREAM_SERVER=http://localhost:5173 npm run tauri dev   # against `make dev`
+npm run tauri build -- --bundles deb,rpm                   # nsis on Windows
+```
+
+Linux also needs the WebKitGTK 4.1, AppIndicator and librsvg development files (Arch: `webkit2gtk-4.1 libayatana-appindicator librsvg`). `CUPSTREAM_SERVER` only sets the server on the first run; afterwards it is in the app's settings.
+
+- **Sign-in** opens the website in the browser (`/app/authorize`); the app session token is kept in the system keychain (Secret Service, Windows Credential Manager).
+- **Going live** asks the server for a stream (following the start mode; when no Discord room is possible, or the user is live elsewhere, the window asks first), publishes, and copies the room link. If the connection drops, it publishes again to the same stream a few times before giving up.
+- **Realtime:** while running, the app keeps the realtime WebSocket open, so the website lists it (`apps`) and can ask it to go live (`goLive`). While live it follows its room and applies the server's `bitrateTarget` as a ceiling on the chosen bitrate.
+- **Tray** (Go live / Stop, Copy room link, Open, Quit); closing the window keeps the app running. **Hotkey** (default Ctrl+Shift+F9) starts and stops; it does not work on Wayland yet. **`cupstream://go-live?room=<slug>`** starts going live; any other `cupstream://` link opens the window.
 
 ## How it works
 

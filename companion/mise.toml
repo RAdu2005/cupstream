@@ -2,3 +2,4 @@
 # server and website CI jobs do not install Rust.
 [tools]
 rust = { version = "1.99.1", components = "clippy,rustfmt" }
+node = "24"
