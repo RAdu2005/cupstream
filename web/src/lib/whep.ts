@@ -1,11 +1,29 @@
 import { ApiError } from '@/api/client';
 import type { ErrorResponse } from '@/api/types.gen';
 
+/** Video, audio or both: the tracks a pause or resume applies to. */
+export type Tracks = { video: boolean; audio: boolean };
+
 export type WhepSession = {
   stream: MediaStream;
   peer: RTCPeerConnection;
+  /**
+   * Pauses or resumes tracks of this session on the server, which keeps the
+   * connection: resuming only waits for the next key frame.
+   */
+  control: (action: 'pause' | 'resume', tracks: Tracks) => Promise<void>;
   close: () => Promise<void>;
 };
+
+async function errorOf(res: Response, fallback: string) {
+  let body: ErrorResponse | null = null;
+  try {
+    body = (await res.json()) as ErrorResponse;
+  } catch {
+    // not JSON
+  }
+  return new ApiError(res.status, body?.error ?? `${fallback} (${res.status})`, body?.code);
+}
 
 const SDP = 'application/sdp';
 const TRICKLE = 'application/trickle-ice-sdpfrag';
@@ -48,13 +66,7 @@ export async function playWhep(url: string, onState?: (s: RTCPeerConnectionState
   const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': SDP }, body: pc.localDescription?.sdp });
   if (!res.ok) {
     pc.close();
-    let body: ErrorResponse | null = null;
-    try {
-      body = (await res.json()) as ErrorResponse;
-    } catch {
-      // not JSON
-    }
-    throw new ApiError(res.status, body?.error ?? `Playback failed (${res.status})`, body?.code);
+    throw await errorOf(res, 'Playback failed');
   }
   resource = res.headers.get('Location');
   await pc.setRemoteDescription({ type: 'answer', sdp: await res.text() });
@@ -63,6 +75,15 @@ export async function playWhep(url: string, onState?: (s: RTCPeerConnectionState
   return {
     stream,
     peer: pc,
+    async control(action, tracks) {
+      if (!resource) throw new Error('The media server did not name the session.');
+      const res = await fetch(`${resource}/${action}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(tracks),
+      });
+      if (!res.ok) throw await errorOf(res, `Could not ${action} the stream`);
+    },
     async close() {
       if (closed) return;
       closed = true;

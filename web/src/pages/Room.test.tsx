@@ -142,3 +142,54 @@ test('shows the refusal when access ends', async () => {
   );
   expect(await screen.findByText('This room is invite only. Ask its owner to let you in.')).toBeInTheDocument();
 });
+
+test('cards start streams in a focus or grid layout, up to four at once', async () => {
+  const streams = ['s1', 's2', 's3', 's4', 's5'].map((id, i) => ({
+    ...stream,
+    id,
+    state: 'live' as const,
+    startedAt: stream.startedAt + i,
+    user: { id: `u${i + 10}`, handle: `user${i}`, displayName: `User ${i}` },
+    thumbnailAt: i === 4 ? 1_800_000_000_123 : undefined,
+  }));
+  setup([json(200, { ...room, streams })]);
+  const cards = within(await screen.findByRole('region', { name: 'Live in this room' }));
+  expect(cards.getByText('Choose a stream to watch')).toBeInTheDocument();
+
+  // Cards show the sender's latest thumbnail, refreshed as it changes.
+  expect(cards.getByRole('button', { name: "Watch User 4's stream" }).querySelector('img')).toHaveAttribute(
+    'src',
+    '/api/streams/s5/thumbnail?v=1800000000123',
+  );
+  expect(cards.getByRole('button', { name: "Watch User 0's stream" }).querySelector('img')).toBeNull();
+  fireEvent.click(cards.getByRole('button', { name: "Watch User 0's stream" }));
+  const main = screen.getByRole('group', { name: "User 0's stream" });
+  expect(within(main).getByRole('button', { name: 'Mute' })).toBeInTheDocument(); // the focused stream is heard
+  expect(screen.queryByRole('radiogroup', { name: 'Layout' })).not.toBeInTheDocument();
+
+  fireEvent.click(cards.getByRole('button', { name: "Watch User 1's stream" }));
+  // User 1 has the focus now; User 0 became a small, muted background tile.
+  const tile0 = within(screen.getByRole('group', { name: "User 0's stream" }));
+  expect(tile0.getByRole('button', { name: 'Unmute' })).toBeInTheDocument();
+  expect(tile0.queryByRole('button', { name: 'Fullscreen' })).not.toBeInTheDocument();
+  expect(screen.getByText('Watching 2 of 4')).toBeInTheDocument();
+
+  const video0 = screen.getByRole('group', { name: "User 0's stream" }).querySelector('video');
+  fireEvent.click(screen.getByRole('radio', { name: 'Grid' }));
+  expect(within(screen.getByRole('group', { name: "User 0's stream" })).getByRole('button', { name: 'Fullscreen' }))
+    .toBeInTheDocument();
+  // Changing the layout keeps the video elements, so playback does not restart.
+  expect(screen.getByRole('group', { name: "User 0's stream" }).querySelector('video')).toBe(video0);
+
+  fireEvent.click(cards.getByRole('button', { name: "Watch User 2's stream" }));
+  fireEvent.click(cards.getByRole('button', { name: "Watch User 3's stream" }));
+  expect(screen.getByText(/You can watch up to 4 streams at once/)).toBeInTheDocument();
+  expect(cards.getByRole('button', { name: "Watch User 4's stream" })).toBeDisabled();
+
+  // Pausing one makes room for another.
+  fireEvent.click(within(screen.getByRole('group', { name: "User 0's stream" })).getByRole('button', { name: 'Pause' }));
+  expect(cards.getByRole('button', { name: "Watch User 4's stream" })).toBeEnabled();
+  fireEvent.click(within(screen.getByRole('group', { name: "User 1's stream" })).getByRole('button', { name: 'Stop watching' }));
+  expect(screen.queryByRole('group', { name: "User 1's stream" })).not.toBeInTheDocument();
+  expect(cards.getByRole('button', { name: "Watch User 1's stream" })).toBeInTheDocument();
+});
