@@ -3,6 +3,8 @@ package discord
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"net/http"
 	"slices"
 	"sort"
 	"testing"
@@ -50,6 +52,44 @@ type fakeAPI struct {
 	voice   map[string]*discordgo.VoiceState // by user ID
 	members map[string]*discordgo.Member
 	lookups int
+
+	// Status messages, by message ID, and what was done to them.
+	messages  map[string]*discordgo.MessageSend
+	calls     []string
+	nextID    int
+	responses []*discordgo.InteractionResponse
+}
+
+func (a *fakeAPI) SendMessage(_ context.Context, channelID string, m *discordgo.MessageSend) (string, error) {
+	a.nextID++
+	id := fmt.Sprintf("m%d", a.nextID)
+	a.messages[id] = m
+	a.calls = append(a.calls, "send "+channelID)
+	return id, nil
+}
+
+func (a *fakeAPI) EditMessage(_ context.Context, channelID, messageID string, m *discordgo.MessageSend) error {
+	if a.messages[messageID] == nil {
+		return &discordgo.RESTError{Response: &http.Response{StatusCode: http.StatusNotFound}}
+	}
+	a.messages[messageID] = m
+	a.calls = append(a.calls, "edit "+channelID+" "+messageID)
+	return nil
+}
+
+func (a *fakeAPI) DeleteMessage(_ context.Context, channelID, messageID string) error {
+	delete(a.messages, messageID)
+	a.calls = append(a.calls, "delete "+channelID+" "+messageID)
+	return nil
+}
+
+func (a *fakeAPI) RegisterCommands(context.Context, string, []*discordgo.ApplicationCommand) error {
+	return nil
+}
+
+func (a *fakeAPI) Respond(_ context.Context, _ *discordgo.Interaction, r *discordgo.InteractionResponse) error {
+	a.responses = append(a.responses, r)
+	return nil
 }
 
 func (a *fakeAPI) UserVoiceState(_ context.Context, _, userID string) (*discordgo.VoiceState, error) {
@@ -72,7 +112,7 @@ func newFixture(t *testing.T) *fixture {
 	}
 	t.Cleanup(func() { db.Close() })
 	start := time.Unix(1_800_000_000, 0)
-	f := &fixture{t: t, db: db, rooms: rooms.New(db), clock: start, start: start, api: &fakeAPI{voice: map[string]*discordgo.VoiceState{}}, checked: map[string][]time.Duration{}}
+	f := &fixture{t: t, db: db, rooms: rooms.New(db), clock: start, start: start, api: &fakeAPI{voice: map[string]*discordgo.VoiceState{}, messages: map[string]*discordgo.MessageSend{}}, checked: map[string][]time.Duration{}}
 	f.bot = New(db, f.rooms, "token")
 	f.bot.now = func() time.Time { return f.clock }
 	f.bot.after = func(d time.Duration, fn func()) { f.timers = append(f.timers, timer{f.clock.Add(d), fn}) }

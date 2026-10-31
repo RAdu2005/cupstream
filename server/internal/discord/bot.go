@@ -17,6 +17,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"slices"
 	"sync"
 	"time"
@@ -45,6 +46,11 @@ type restAPI interface {
 	// they are not in voice there.
 	UserVoiceState(ctx context.Context, guildID, userID string) (*discordgo.VoiceState, error)
 	GuildMember(ctx context.Context, guildID, userID string) (*discordgo.Member, error)
+	SendMessage(ctx context.Context, channelID string, m *discordgo.MessageSend) (id string, err error)
+	EditMessage(ctx context.Context, channelID, messageID string, m *discordgo.MessageSend) error
+	DeleteMessage(ctx context.Context, channelID, messageID string) error
+	RegisterCommands(ctx context.Context, appID string, cmds []*discordgo.ApplicationCommand) error
+	Respond(ctx context.Context, i *discordgo.Interaction, r *discordgo.InteractionResponse) error
 }
 
 type Bot struct {
@@ -65,6 +71,11 @@ type Bot struct {
 	// their stream in its room, if any, ends at endsAt; a zero endsAt means
 	// they are back. Set it before Run.
 	StreamerGrace func(ctx context.Context, discordUserID string, room store.Room, endsAt time.Time)
+	// Streams lists a room's live streams (gateway.RoomStreams), for status
+	// messages. Set it before Run.
+	Streams func(roomID string) []gateway.LiveStream
+	// PublicURL is the website, for links to rooms.
+	PublicURL *url.URL
 
 	ctx context.Context // Run's, for scheduled work
 
@@ -73,6 +84,11 @@ type Bot struct {
 	readyOnce bool // the bot has connected at least once
 	guilds    map[string]*guild
 	settings  map[string]store.DiscordGuild // by guild ID
+
+	// Status messages, used by syncStatus only: what each channel's message
+	// says, and when to try a channel again after Discord refused.
+	lastStatus  map[string]status
+	statusRetry map[string]time.Time
 }
 
 func New(db *store.DB, rs *rooms.Service, token string) *Bot {
@@ -82,6 +98,10 @@ func New(db *store.DB, rs *rooms.Service, token string) *Bot {
 		Reevaluate:    func(context.Context, store.Room) {},
 		EndStreams:    func(context.Context, store.Room, string) {},
 		StreamerGrace: func(context.Context, string, store.Room, time.Time) {},
+		Streams:       func(string) []gateway.LiveStream { return nil },
+		PublicURL:     &url.URL{Scheme: "http", Host: "localhost"},
+		lastStatus:    map[string]status{},
+		statusRetry:   map[string]time.Time{},
 		ctx:           context.Background(),
 		guilds:        map[string]*guild{},
 		settings:      map[string]store.DiscordGuild{},
@@ -113,6 +133,8 @@ func (b *Bot) Run(ctx context.Context) error {
 
 	t := time.NewTicker(forgetInterval)
 	defer t.Stop()
+	st := time.NewTicker(statusInterval)
+	defer st.Stop()
 	for {
 		select {
 		case <-ctx.Done():
@@ -120,6 +142,8 @@ func (b *Bot) Run(ctx context.Context) error {
 		case <-t.C:
 			b.forget()
 			b.refreshStreamers(ctx)
+		case <-st.C:
+			b.syncStatus(ctx)
 		}
 	}
 }
@@ -289,6 +313,12 @@ func (b *Bot) handle(e any) {
 	switch e := e.(type) {
 	case *discordgo.Ready:
 		todo = b.onReady(e)
+		if e.Application != nil {
+			appID := e.Application.ID
+			b.after(0, func() { b.registerCommands(appID) })
+		}
+	case *discordgo.InteractionCreate:
+		b.after(0, func() { b.onInteraction(e.Interaction) })
 	case *discordgo.Resumed:
 		todo = b.onResumed()
 	case *discordgo.Disconnect:

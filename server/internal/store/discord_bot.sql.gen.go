@@ -64,6 +64,15 @@ func (q *Queries) CreateStreamPass(ctx context.Context, arg CreateStreamPassPara
 	return err
 }
 
+const deleteStatusMessage = `-- name: DeleteStatusMessage :exec
+DELETE FROM discord_status_messages WHERE channel_id = ?
+`
+
+func (q *Queries) DeleteStatusMessage(ctx context.Context, channelID string) error {
+	_, err := q.db.ExecContext(ctx, deleteStatusMessage, channelID)
+	return err
+}
+
 const ensureDiscordGuild = `-- name: EnsureDiscordGuild :exec
 INSERT INTO discord_guilds (guild_id, created_at) VALUES (?, ?) ON CONFLICT DO NOTHING
 `
@@ -308,6 +317,38 @@ func (q *Queries) ListLiveDiscordStreamers(ctx context.Context) ([]ListLiveDisco
 	return items, nil
 }
 
+const listStatusMessages = `-- name: ListStatusMessages :many
+SELECT channel_id, guild_id, message_id, created_at FROM discord_status_messages
+`
+
+func (q *Queries) ListStatusMessages(ctx context.Context) ([]DiscordStatusMessage, error) {
+	rows, err := q.db.QueryContext(ctx, listStatusMessages)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DiscordStatusMessage{}
+	for rows.Next() {
+		var i DiscordStatusMessage
+		if err := rows.Scan(
+			&i.ChannelID,
+			&i.GuildID,
+			&i.MessageID,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const moveStream = `-- name: MoveStream :exec
 UPDATE streams SET room_id = ? WHERE id = ? AND ended_at IS NULL
 `
@@ -339,6 +380,29 @@ func (q *Queries) UpdateDiscordGuild(ctx context.Context, arg UpdateDiscordGuild
 		arg.Announce,
 		arg.TrackedChannels,
 		arg.GuildID,
+	)
+	return err
+}
+
+const upsertStatusMessage = `-- name: UpsertStatusMessage :exec
+INSERT INTO discord_status_messages (channel_id, guild_id, message_id, created_at)
+VALUES (?, ?, ?, ?)
+ON CONFLICT (channel_id) DO UPDATE SET message_id = excluded.message_id, created_at = excluded.created_at
+`
+
+type UpsertStatusMessageParams struct {
+	ChannelID string
+	GuildID   string
+	MessageID string
+	CreatedAt int64
+}
+
+func (q *Queries) UpsertStatusMessage(ctx context.Context, arg UpsertStatusMessageParams) error {
+	_, err := q.db.ExecContext(ctx, upsertStatusMessage,
+		arg.ChannelID,
+		arg.GuildID,
+		arg.MessageID,
+		arg.CreatedAt,
 	)
 	return err
 }

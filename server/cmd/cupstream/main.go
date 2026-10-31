@@ -117,6 +117,7 @@ func run() error {
 			gw.Reevaluate(ctx, room)
 			hub.Reevaluate(ctx, room)
 		}
+		bot.Streams, bot.PublicURL = gw.RoomStreams, cfg.PublicURL
 		bot.EndStreams = func(ctx context.Context, room store.Room, reason string) {
 			gw.EndRoomStreams(ctx, room.ID, reason)
 		}
