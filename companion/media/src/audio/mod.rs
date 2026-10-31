@@ -24,6 +24,7 @@ pub enum AudioMode {
 }
 
 /// Which application streams are captured.
+#[cfg(target_os = "linux")]
 #[derive(Clone, Debug)]
 pub(crate) enum Filter {
     ExceptDiscord,
