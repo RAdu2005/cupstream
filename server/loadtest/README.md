@@ -45,4 +45,15 @@ Keep runs short when other people share the machine: 150 viewers of 8 Mbit/s mov
 - A new viewer's first keyframe arrives after about 235 ms (median), 0.6 s at the 95th percentile and 1.3 s at worst, while 10 viewers join per second.
 - With `CUPSTREAM_EGRESS_INTERFACE=lo CUPSTREAM_EGRESS_LIMIT_MBPS=100`, admission control let 18 viewers of a 4.2 Mbit/s stream in and refused the other 22 with 503 `server_full`.
 
-Loopback is not the production NIC, and the laptop is not the production server. The plateau should be measured again on the server's own hardware before relying on the 800 Mbit/s admission limit. If it is as low there, MediaMTX's send path (changes 16–17, sendmmsg/GSO) is the next thing to work on.
+Loopback is not the production NIC, and the laptop is not the production server. The plateau should be measured again on the server's own hardware before relying on the 800 Mbit/s admission limit.
+
+### Several UDP sockets (30 October 2026)
+
+A goroutine dump at the plateau showed every reader's writer (150 of 150) waiting on the shared socket's write lock, with one in `sendto`: all viewers' packets went out one at a time. `v1.21.2-cupstream.4` adds `webrtcLocalUDPSockets` (RAdu2005/mediamtx#1). Same laptop, MediaMTX run natively; 1 stream × 150 viewers, 8.2 Mbit/s 1080p60:
+
+| Build | Out of MediaMTX | Starved | Frames discarded | MediaMTX CPU | First keyframe (median / p95) |
+|---|---|---|---|---|---|
+| `cupstream.3`, one socket | ~970 Mbit/s plateau | ~75 of 150 | many ("reader is too slow") | ~1.3 cores | 234 / 545 ms |
+| `cupstream.4`, `webrtcLocalUDPSockets: 8` | ~1.25 Gbit/s, everything | 0 | none | ~2 cores | 135 / 336 ms |
+
+That is beyond the production server's 1 Gbit/s link, so the network is the limit again. Changes 16 and 17 (packetizing once per stream, pacing) are not needed for capacity and stay deferred. Pacing could still smooth key frames reaching many viewers at once on real links, which loopback cannot show.

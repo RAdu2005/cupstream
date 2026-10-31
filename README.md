@@ -47,7 +47,7 @@ docker compose build mediamtx
 id=$(docker create cupstream-mediamtx:<tag>) && docker cp $id:/usr/local/bin/mediamtx . && docker rm $id
 ```
 
-On the server: install it as `/usr/local/bin/mediamtx`, with a system user `mediamtx`, [mediamtx.yml](deploy/mediamtx/mediamtx.yml) as `/etc/mediamtx/mediamtx.yml`, [env.example](deploy/mediamtx/env.example) adapted as `/etc/mediamtx/env` (both `root:mediamtx`, mode 640) and [mediamtx.service](deploy/mediamtx/mediamtx.service) in `/etc/systemd/system/`. Open port 8189 (UDP and TCP) in the firewall, raise the UDP send buffer limit (see [MediaMTX build](docs/mediamtx.md)), then restart `mediamtx` and `cupstream`: the server reads MediaMTX's features at startup, and `/healthz` should report `"pause":true,"events":true`.
+On the server: install it as `/usr/local/bin/mediamtx`, with a system user `mediamtx`, [mediamtx.yml](deploy/mediamtx/mediamtx.yml) as `/etc/mediamtx/mediamtx.yml`, [env.example](deploy/mediamtx/env.example) adapted as `/etc/mediamtx/env` (both `root:mediamtx`, mode 640) and [mediamtx.service](deploy/mediamtx/mediamtx.service) in `/etc/systemd/system/`. Open port 8189 (UDP and TCP) in the firewall, raise the UDP send buffer limit (see [MediaMTX build](docs/mediamtx.md)), then restart `mediamtx` and `cupstream`: the server reads MediaMTX's features at startup, and `/healthz` should report `"pause":true,"events":true`. Upgrading and rolling back: [docs/mediamtx.md](docs/mediamtx.md#upgrading-in-production).
 
 ## Configuration
 

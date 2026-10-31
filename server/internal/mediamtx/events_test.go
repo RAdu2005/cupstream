@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"strings"
 	"testing"
 )
 
@@ -22,6 +24,38 @@ func TestFeaturesOf(t *testing.T) {
 	} {
 		if got := FeaturesOf(v); got != want {
 			t.Errorf("FeaturesOf(%q) = %+v, want %+v", v, got, want)
+		}
+	}
+}
+
+func TestOutdated(t *testing.T) {
+	for v, want := range map[string]bool{
+		"v1.21.2":                               true,
+		"v1.21.2-cupstream.3":                   true,
+		"v1.21.2-cupstream.3-2-gcece8829-dirty": true,
+		"v1.21.2-cupstream.4":                   false,
+		"v1.21.2-cupstream.4-1-g2fe8176":        false,
+		"v1.21.2-cupstream.12":                  false,
+		"v1.22.0-cupstream.1":                   false, // another release: not compared
+	} {
+		if got := Outdated(v); got != want {
+			t.Errorf("Outdated(%q) = %v, want %v", v, got, want)
+		}
+	}
+	if Outdated(PinnedBuild) {
+		t.Error("the pinned build is outdated")
+	}
+}
+
+// The image pins are where PinnedBuild comes from; they must agree.
+func TestPinnedBuildMatchesImage(t *testing.T) {
+	for _, f := range []string{"../../../deploy/mediamtx/Dockerfile", "../../../compose.yaml"} {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(b), PinnedBuild) {
+			t.Errorf("%s does not pin %s", f, PinnedBuild)
 		}
 	}
 }
