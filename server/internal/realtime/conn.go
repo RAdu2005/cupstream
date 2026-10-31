@@ -43,14 +43,16 @@ const (
 	statusSignedOut websocket.StatusCode = 4001
 )
 
-// conn is one browser tab's WebSocket.
+// conn is one browser tab's WebSocket, or a running desktop app's.
 type conn struct {
-	hub       *Hub
-	ws        *websocket.Conn
-	userID    string   // "" when signed out
-	user      api.User // guarded by hub.mu once connected: UserChanged updates it
-	sessionID string
-	tab       string
+	hub        *Hub
+	ws         *websocket.Conn
+	userID     string   // "" when signed out
+	user       api.User // guarded by hub.mu once connected: UserChanged updates it
+	sessionID  string
+	tab        string
+	app        bool // signed in with a desktop-app session
+	deviceName string
 
 	queue chan []byte
 	done  chan struct{} // closed by kill
@@ -98,7 +100,8 @@ func (h *Hub) allowedOrigin(r *http.Request) bool {
 	return err == nil && u.Scheme == pub.Scheme && u.Host == pub.Host
 }
 
-// Serve serves GET /api/realtime?tab=<id>: the WebSocket of one browser tab.
+// Serve serves GET /api/realtime?tab=<id>: the WebSocket of one browser tab,
+// or of the desktop app (signed in with its Bearer token, without a tab).
 func (h *Hub) Serve(w http.ResponseWriter, r *http.Request) {
 	if !h.allowedOrigin(r) {
 		http.Error(w, "cross-origin WebSocket refused", http.StatusForbidden)
@@ -135,6 +138,7 @@ func (h *Hub) Serve(w http.ResponseWriter, r *http.Request) {
 	}
 	if cur, ok := auth.FromContext(r.Context()); ok {
 		c.userID, c.user, c.sessionID = cur.User.ID, view.User(cur.User), cur.SessionID
+		c.app, c.deviceName = cur.Kind == auth.KindApp, cur.DeviceName
 	}
 	if !h.connect(c) {
 		ws.Close(statusGoingAway, "the server is restarting")
@@ -188,6 +192,8 @@ func (h *Hub) handle(ctx context.Context, c *conn, m api.ClientMessage) {
 		h.sendChat(ctx, c, m)
 	case "deleteChat":
 		h.deleteChat(ctx, c, m)
+	case "appGoLive":
+		h.appGoLive(c, m)
 	default:
 		c.send(api.RealtimeError{Type: "error", Room: m.Room, Ref: m.Ref, Code: "invalid", Error: "unknown message type"})
 	}
@@ -286,6 +292,7 @@ func (h *Hub) connect(c *conn) bool {
 	}
 	h.wg.Add(1)
 	h.conns[c] = struct{}{}
+	h.appConnectedLocked(c)
 	if c.tab != "" {
 		k := tabKey{c.userID, c.tab}
 		ts := h.tabs[k]
@@ -307,6 +314,7 @@ func (h *Hub) disconnect(c *conn) {
 	defer h.mu.Unlock()
 	c.closed = true
 	delete(h.conns, c)
+	h.appDisconnectedLocked(c)
 	for _, rs := range c.subs {
 		h.unsubscribeLocked(c, rs)
 	}
