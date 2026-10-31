@@ -194,6 +194,8 @@ func (h *Hub) handle(ctx context.Context, c *conn, m api.ClientMessage) {
 		h.deleteChat(ctx, c, m)
 	case "appGoLive":
 		h.appGoLive(c, m)
+	case "viewerReport":
+		h.viewerReport(c, m)
 	default:
 		c.send(api.RealtimeError{Type: "error", Room: m.Room, Ref: m.Ref, Code: "invalid", Error: "unknown message type"})
 	}

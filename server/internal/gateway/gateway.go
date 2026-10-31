@@ -119,6 +119,7 @@ type session struct {
 	held   bool            // paused by the server: the viewer lost access
 	heldAt time.Time
 	stats  sessionStats
+	report viewerReport // what the viewer's browser measured
 }
 
 // watching reports whether a viewer receives media: not held, and not
