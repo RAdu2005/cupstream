@@ -1,0 +1,7 @@
+# Discord bot
+
+The bot runs inside the server when `CUPSTREAM_DISCORD_BOT_TOKEN` is set, and enables Discord rooms: one per voice channel, created when first used, which only people in that channel who signed in with Discord can enter. Use the same Discord application as Discord sign-in: under *Bot*, reset and copy the token; it needs no privileged intents. Invite it to a test server with `https://discord.com/oauth2/authorize?client_id=<client ID>&scope=bot+applications.commands&permissions=19456` (View Channels, Send Messages, Embed Links).
+
+While a room is live, the bot keeps one status message in the voice channel's text chat that lists its streams and links to the room; it edits it at most every 5 seconds and deletes it when the room goes idle. Members with Manage Server change the server's settings with `/cupstream settings`: who may stream (Discord's Video permission or anyone in the channel), status messages on or off, and which voice channels get rooms.
+
+The bot keeps what it knows in memory: each server's roles and channels, and the voice channels of people who use CupStream (nobody else's). Viewers who leave the channel are paused after 1.5 seconds and disconnected after 2 minutes; streamers keep streaming for 12 seconds. While the bot is disconnected from Discord, these grace periods stand still and nobody is paused, disconnected or ended, until it sees the servers again.

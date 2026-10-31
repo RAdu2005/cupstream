@@ -10,7 +10,8 @@ logLevel: info
 
 # The UDP socket that all viewers share gets a larger send buffer, so that
 # key frames going out to many viewers at once do not block it. Linux caps
-# it at net.core.wmem_max, which has to be raised on the host (see README).
+# it at net.core.wmem_max, which has to be raised on the host (see
+# docs/mediamtx.md).
 udpWriteBufferSize: 8388608
 
 # WHIP and WHEP requests reach the WebRTC listener, which listens on

@@ -1,6 +1,6 @@
 # Working on CupStream
 
-Rules for coding agents (and a summary for people). The README has the layout, the commands and the configuration.
+Rules for coding agents (and a summary for people). The README has the layout, the commands and the configuration; `docs/` has a file per feature area.
 
 ## Branches and pull requests
 
