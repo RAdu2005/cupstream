@@ -17,13 +17,19 @@ sudo sysctl --system
 
 ## Upgrading in production
 
-MediaMTX is installed by hand (see [Deployment](../README.md#deployment)). To move to a new pinned tag:
+MediaMTX is installed by hand (see [Deployment](../README.md#deployment)).
+
+**MediaMTX applies every change to its configuration file at once.** It reloads the file as soon as it changes. A setting the running build does not know, or any other invalid edit, makes it log the error and exit. That exit is clean, so `Restart=on-failure` does not start it again: on 31 October 2026, adding `webrtcLocalUDPSockets` while `.3` was still running stopped MediaMTX until it was started by hand. So stop MediaMTX before changing its configuration together with its binary.
+
+To move to a new pinned tag:
 
 1. Take the binary from the image as for installing, check that `./mediamtx --version` prints the tag, and note its `sha256sum`.
 2. Copy it to the server, and check the checksum there.
-3. Keep the old binary and `/etc/mediamtx/mediamtx.yml` next to the new ones.
-4. Apply the release's configuration changes, which the pull request that bumps the pin lists.
-5. When nobody is live (see `/admin`), restart `mediamtx`. Restarting ends every live stream and viewer session. The CupStream server notices the restart by itself and reads the new version.
-6. Check that `/healthz` reports the new version under `mediamtx`.
+3. Keep the old binary and `/etc/mediamtx/mediamtx.yml` next to the new ones, e.g. as `/usr/local/bin/mediamtx.<old build>` and `/etc/mediamtx/mediamtx.yml.<old build>`.
+4. Check that nobody is live, with `/admin` or MediaMTX's API: `curl -s 'http://127.0.0.1:9997/v3/webrtc/sessions/list?itemsPerPage=1000' | jq '.items | length'` should print 0. Stopping ends every live stream and viewer session.
+5. `sudo systemctl stop mediamtx`.
+6. Apply the release's configuration changes (the pull request that bumps the pin lists them), and install the new binary.
+7. `sudo systemctl start mediamtx`, then check `journalctl -u mediamtx` for the new version and no `ERR`. The CupStream server notices the restart by itself and reads the new version.
+8. Check that `/healthz` reports the new version under `mediamtx`.
 
-To roll back, put both the old binary and the old configuration back, since an older build may refuse newer settings, then restart `mediamtx`.
+To roll back, stop `mediamtx`, put both the old binary and the old configuration back (an older build may refuse newer settings), then start it.
