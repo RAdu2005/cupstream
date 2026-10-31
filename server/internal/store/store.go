@@ -73,7 +73,14 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	if err != nil {
 		return err
 	}
-	p, err := goose.NewProvider(goose.DialectSQLite3, db, dir)
+	return migrateFS(ctx, db, dir)
+}
+
+// migrateFS applies the migrations in dir, including ones numbered below the
+// newest applied migration: pull requests merge in any order, so a migration
+// from an older branch can land after a newer one.
+func migrateFS(ctx context.Context, db *sql.DB, dir fs.FS) error {
+	p, err := goose.NewProvider(goose.DialectSQLite3, db, dir, goose.WithAllowOutofOrder(true))
 	if err != nil {
 		return fmt.Errorf("migrations: %w", err)
 	}

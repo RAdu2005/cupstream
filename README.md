@@ -34,7 +34,7 @@ make dev
 | `make images` | Docker images for CupStream and MediaMTX |
 | `make tidy` | Fast-forward the main checkout's `master` and delete local branches whose pull request was merged; `scripts/tidy.sh --install` runs it every 15 minutes |
 
-Database changes go in a new file in `server/internal/store/migrations/`, with queries in `server/internal/store/queries/`; run `make generate` afterwards. In a query, use either `?` or `sqlc.arg(name)` for all parameters, never both: sqlc numbers mixed parameters wrongly. API types live in `server/internal/api/` so the website types can be generated from them.
+Database changes go in a new migration: `make migration name=add_something` creates `server/internal/store/migrations/<UTC time>_add_something.sql`. Queries go in `server/internal/store/queries/`; run `make generate` afterwards. Migrations are numbered by the time they were created, so branches never compete for the next number, and the server also applies one that merges after a newer one (00001–00010 predate this). In a query, use either `?` or `sqlc.arg(name)` for all parameters, never both: sqlc numbers mixed parameters wrongly. API types live in `server/internal/api/` so the website types can be generated from them.
 
 ### Signing in with Google and Discord
 
