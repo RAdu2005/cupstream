@@ -87,6 +87,13 @@ func (s *Server) getRoom(w http.ResponseWriter, r *http.Request) {
 		},
 		Streams: []api.Stream{},
 	}
+	if room.Kind == string(access.Discord) {
+		// Watching needs presence in the channel, so names are not a secret.
+		if out.Discord, err = s.discordChannel(ctx, room, userID(r), true); err != nil {
+			internalError(w, r, err)
+			return
+		}
+	}
 	users := view.Users{DB: s.DB}
 	if room.OwnerID.Valid {
 		owner, err := users.Get(ctx, room.OwnerID.String)

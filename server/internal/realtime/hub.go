@@ -531,6 +531,22 @@ func (h *Hub) UserChanged(u api.User) {
 	}
 }
 
+// SendUser sends v to every connection of userID, subscribed to a room or
+// not: messages about them rather than a room.
+func (h *Hub) SendUser(userID string, v any) {
+	if userID == "" {
+		return
+	}
+	b := marshal(v)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for c := range h.conns {
+		if c.userID == userID {
+			c.enqueue(b)
+		}
+	}
+}
+
 // CloseSession closes the connections signed in with a session that ended
 // (signing out, a revoked session).
 func (h *Hub) CloseSession(sessionID string) {

@@ -335,6 +335,10 @@ export interface Room {
   visibility?: Visibility; // link rooms
   permissions: Permissions;
   streams: Stream[];
+  /**
+   * Discord rooms: the voice channel.
+   */
+  discord?: DiscordChannel;
 }
 export interface UpdateRoomRequest {
   visibility: Visibility;
@@ -419,11 +423,20 @@ export interface HomeRoom {
   access?: 'own' | 'allowed' | 'pass';
   canStream: boolean;
   streams: Stream[];
+  /**
+   * Discord rooms: the voice channel.
+   */
+  discord?: DiscordChannel;
 }
 /**
  * Home is the response of GET /api/home.
  */
 export interface Home {
+  /**
+   * Voice is the room of the Discord voice channel the user is in, when
+   * the CupStream bot is in that server.
+   */
+  voice?: HomeRoom;
   /**
    * The user's link room first, then the rooms they may enter, live ones
    * first.
@@ -679,4 +692,29 @@ export interface RealtimeError {
   ref?: string;
   code: string;
   error: string;
+}
+/**
+ * DiscordChannel is a Discord room's voice channel, also served at
+ * GET /api/rooms/{slug}/discord to people who may not enter yet. The server
+ * and channel names are only given to members of the server.
+ */
+export interface DiscordChannel {
+  guildName?: string;
+  channelName?: string;
+  guildIconUrl?: string;
+  /**
+   * URL opens the voice channel in Discord.
+   */
+  url: string;
+}
+/**
+ * StreamGrace tells a streamer, on every tab, that their stream in a
+ * Discord room ends in EndsInMs milliseconds because they left the voice
+ * channel. 0 means they are back and it goes on.
+ */
+export interface StreamGrace {
+  type: 'streamGrace';
+  roomSlug: string;
+  streamId: string;
+  endsInMs: number /* int64 */;
 }

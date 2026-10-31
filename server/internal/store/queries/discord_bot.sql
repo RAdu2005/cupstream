@@ -39,3 +39,6 @@ FROM streams
 JOIN rooms ON rooms.id = streams.room_id
 JOIN identities ON identities.user_id = streams.user_id AND identities.provider = 'discord'
 WHERE streams.ended_at IS NULL AND rooms.kind = 'discord';
+
+-- name: IsGuildMember :one
+SELECT EXISTS (SELECT 1 FROM user_guilds WHERE user_id = ? AND guild_id = ?);

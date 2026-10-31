@@ -1,8 +1,10 @@
 import { DoorOpen, Radio, Settings, Users } from 'lucide-react';
 import { Link } from 'react-router';
 import { useMe } from '@/api/auth';
+import { channelLabel } from '@/api/discord';
 import { useHome } from '@/api/home';
 import type { HomeRoom, User } from '@/api/types.gen';
+import { DiscordVoiceCard } from '@/components/discord/DiscordVoiceCard';
 import { Button, Card } from '@/components/ui';
 
 export function Home() {
@@ -37,6 +39,8 @@ function SignedIn({ user }: { user: User }) {
   return (
     <>
       <h1 className="text-2xl font-bold">Welcome, {user.displayName}</h1>
+
+      {home.data?.voice && <DiscordVoiceCard room={home.data.voice} />}
 
       {own && (
         <Card className="space-y-4">
@@ -110,7 +114,8 @@ function RoomList({ rooms }: { rooms: HomeRoom[] }) {
               </span>
               <span className="min-w-0 flex-1">
                 <span className="block truncate font-semibold">
-                  {r.owner ? `${r.owner.displayName}'s room` : 'Discord room'}
+                  {r.owner ? `${r.owner.displayName}'s room` : (channelLabel(r.discord) ?? 'Discord room')}
+                  {r.discord?.guildName && <span className="font-normal text-muted"> · {r.discord.guildName}</span>}
                 </span>
                 <span className="block truncate text-sm text-muted">
                   {live ? `Live: ${names(r.streams.map((s) => s.user.displayName))}` : 'Nobody is live'}

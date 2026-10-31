@@ -11,6 +11,7 @@ import type {
   RoomChanged,
   StreamEnded,
   StreamEvent,
+  StreamGrace,
   Subscribed,
   ViewerStats,
 } from '@/api/types.gen';
@@ -28,7 +29,8 @@ export type ServerMessage =
   | ChatDeleted
   | RealtimeError
   | Notification
-  | FriendsChanged;
+  | FriendsChanged
+  | StreamGrace;
 
 export type Status = 'connecting' | 'open' | 'closed';
 

@@ -119,6 +119,22 @@ func (q *Queries) IsDiscordLinked(ctx context.Context, subject string) (bool, er
 	return exists, err
 }
 
+const isGuildMember = `-- name: IsGuildMember :one
+SELECT EXISTS (SELECT 1 FROM user_guilds WHERE user_id = ? AND guild_id = ?)
+`
+
+type IsGuildMemberParams struct {
+	UserID  string
+	GuildID string
+}
+
+func (q *Queries) IsGuildMember(ctx context.Context, arg IsGuildMemberParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, isGuildMember, arg.UserID, arg.GuildID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const listDiscordGuilds = `-- name: ListDiscordGuilds :many
 SELECT guild_id, stream_policy, announce, tracked_channels, created_at FROM discord_guilds
 `

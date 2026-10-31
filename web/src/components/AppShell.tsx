@@ -4,6 +4,7 @@ import { useLogout, useMe } from '@/api/auth';
 import { useFriends } from '@/api/friends';
 import { GoLiveButton } from './GoLiveButton';
 import { Notifications } from './Notifications';
+import { StreamGraceBanner } from './discord/StreamGraceBanner';
 import { Button } from './ui';
 
 export function AppShell() {
@@ -16,6 +17,7 @@ export function AppShell() {
         </Link>
         <UserMenu />
       </header>
+      <StreamGraceBanner />
       <main className="flex flex-1 flex-col">
         <Outlet />
       </main>

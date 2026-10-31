@@ -467,3 +467,27 @@ func TestChannel(t *testing.T) {
 		t.Error("a tracked channel has no room")
 	}
 }
+
+func TestStreamerCountdown(t *testing.T) {
+	f := newFixture(t)
+	f.link("alice")
+	room := f.room("c1")
+	type call struct {
+		user, room string
+		endsAt     time.Time
+	}
+	var calls []call
+	f.bot.StreamerGrace = func(_ context.Context, userID string, r store.Room, endsAt time.Time) {
+		calls = append(calls, call{userID, r.Slug, endsAt})
+	}
+	f.bot.handle(ready())
+	f.bot.handle(snapshot(voice("alice", "c1", streamers)))
+	f.bot.handle(voiceUpdate("alice", "", streamers))
+	f.advance(time.Second)
+	f.bot.handle(voiceUpdate("alice", "c1", streamers))
+	f.advance(0)
+	want := []call{{"alice", room.Slug, f.start.Add(streamerGrace)}, {"alice", room.Slug, time.Time{}}}
+	if !slices.Equal(calls, want) {
+		t.Fatalf("calls = %v, want %v", calls, want)
+	}
+}

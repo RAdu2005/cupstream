@@ -73,3 +73,19 @@ test('explains where rooms come from when there are none', async () => {
   expect(screen.getByText(/When someone adds you to their room/)).toBeInTheDocument();
   expect(screen.queryByRole('region', { name: 'Friends live now' })).not.toBeInTheDocument();
 });
+
+test('shows the room of the voice channel one is in, and names Discord rooms', async () => {
+  const dave = user('dave', 'Dave');
+  const channel = { guildName: 'Friends', channelName: 'General', url: 'https://discord.com/channels/g/c' };
+  setup({
+    voice: { slug: 'vc', kind: 'discord', canStream: true, streams: [live(dave, 2)], discord: channel },
+    rooms: [{ slug: 'own', kind: 'link', owner: alice, access: 'own', canStream: true, streams: [] }],
+    friendsLive: [{ slug: 'vc', kind: 'discord', canStream: true, streams: [live(dave, 2)], discord: channel }],
+  });
+  expect(await screen.findByText('You are in #General')).toBeInTheDocument();
+  const links = screen.getAllByRole('link', { name: 'Open room' }).map((l) => l.getAttribute('href'));
+  expect(links).toEqual(['/r/vc', '/r/own']);
+  const friends = within(screen.getByRole('region', { name: 'Friends live now' }));
+  expect(friends.getByText('#General')).toBeInTheDocument();
+  expect(friends.getByText('· Friends')).toBeInTheDocument();
+});

@@ -8,6 +8,9 @@ import { useRoom } from '@/api/rooms';
 import { ChatPanel } from '@/components/ChatPanel';
 import { ManageRoom } from '@/components/ManageRoom';
 import { MemberActions } from '@/components/MemberActions';
+import { DiscordChat } from '@/components/discord/DiscordChat';
+import { DiscordJoinPrompt, discordRefusals } from '@/components/discord/DiscordJoinPrompt';
+import { DiscordRoomHeading } from '@/components/discord/DiscordRoomHeading';
 import { PresenceList } from '@/components/PresenceList';
 import { RoomStreams } from '@/components/RoomStreams';
 import { Button, Card } from '@/components/ui';
@@ -29,7 +32,11 @@ export function Room() {
     <div className="mx-auto w-full max-w-7xl space-y-6 p-4 sm:p-8">
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold">{data.owner ? `${data.owner.displayName}'s room` : 'Discord room'}</h1>
+          {data.owner ? (
+            <h1 className="text-2xl font-bold">{`${data.owner.displayName}'s room`}</h1>
+          ) : (
+            <DiscordRoomHeading room={data} />
+          )}
           {data.visibility && (
             <p className="flex items-center gap-1.5 text-sm text-muted">
               <Lock className="size-3.5" aria-hidden /> {visibilityLabel[data.visibility]}
@@ -55,16 +62,18 @@ export function Room() {
             live={new Set(data.streams.map((s) => s.user.id))}
             actions={isOwner ? (u) => u.id !== me?.id && <MemberActions slug={data.slug} user={u} /> : undefined}
           />
-          <ChatPanel
-            messages={live.chat}
-            signedIn={!!me}
-            canChat={data.permissions.chat}
-            canModerate={data.permissions.moderateChat}
-            connected={live.status === 'open'}
-            error={live.chatError}
-            onSend={live.sendChat}
-            onDelete={live.deleteChat}
-          />
+          <DiscordChat room={data} count={live.chat.length}>
+            <ChatPanel
+              messages={live.chat}
+              signedIn={!!me}
+              canChat={data.permissions.chat}
+              canModerate={data.permissions.moderateChat}
+              connected={live.status === 'open'}
+              error={live.chatError}
+              onSend={live.sendChat}
+              onDelete={live.deleteChat}
+            />
+          </DiscordChat>
         </aside>
       </div>
     </div>
@@ -107,6 +116,7 @@ function Kicked() {
 function RoomRefused({ error }: { error: Error }) {
   const code = error instanceof ApiError ? error.code : undefined;
   const status = error instanceof ApiError ? error.status : 0;
+  if (code && discordRefusals.has(code)) return <DiscordJoinPrompt code={code} />;
   const message =
     status === 404
       ? 'This room does not exist.'
