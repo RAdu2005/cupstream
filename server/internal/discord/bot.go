@@ -17,12 +17,14 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
 
 	"github.com/RAdu2005/cupstream/server/internal/access"
+	"github.com/RAdu2005/cupstream/server/internal/gateway"
 	"github.com/RAdu2005/cupstream/server/internal/rooms"
 	"github.com/RAdu2005/cupstream/server/internal/store"
 )
@@ -56,6 +58,9 @@ type Bot struct {
 	// Reevaluate applies a change of who may be in a room to its media
 	// sessions and realtime subscriptions. Set it before Run.
 	Reevaluate func(ctx context.Context, room store.Room)
+	// EndStreams ends every stream in a room, with a reason
+	// (gateway.EndDiscord*). Set it before Run.
+	EndStreams func(ctx context.Context, room store.Room, reason string)
 
 	ctx context.Context // Run's, for scheduled work
 
@@ -71,6 +76,7 @@ func New(db *store.DB, rs *rooms.Service, token string) *Bot {
 		db: db, rooms: rs, token: token, now: time.Now,
 		after:      func(d time.Duration, f func()) { time.AfterFunc(d, f) },
 		Reevaluate: func(context.Context, store.Room) {},
+		EndStreams: func(context.Context, store.Room, string) {},
 		ctx:        context.Background(),
 		guilds:     map[string]*guild{},
 		settings:   map[string]store.DiscordGuild{},
@@ -108,6 +114,7 @@ func (b *Bot) Run(ctx context.Context) error {
 			return nil
 		case <-t.C:
 			b.forget()
+			b.refreshStreamers(ctx)
 		}
 	}
 }
@@ -133,14 +140,37 @@ func (b *Bot) forget() {
 	}
 }
 
+// settings are a server's bot settings (discord_guilds).
+type settings struct{ store.DiscordGuild }
+
+func (s settings) policy() access.StreamPolicy {
+	if s.StreamPolicy == "" {
+		return access.VideoPermission
+	}
+	return access.StreamPolicy(s.StreamPolicy)
+}
+
+// tracks reports whether the server's rooms include a voice channel.
+func (s settings) tracks(channelID string) bool {
+	if !s.TrackedChannels.Valid {
+		return true
+	}
+	var ids []string
+	if err := json.Unmarshal([]byte(s.TrackedChannels.String), &ids); err != nil {
+		return true
+	}
+	return slices.Contains(ids, channelID)
+}
+
+func (b *Bot) settingsLocked(guildID string) settings {
+	return settings{b.settings[guildID]}
+}
+
 // Policy implements rooms.Voice.
 func (b *Bot) Policy(guildID string) access.StreamPolicy {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if s, ok := b.settings[guildID]; ok {
-		return access.StreamPolicy(s.StreamPolicy)
-	}
-	return access.VideoPermission
+	return b.settingsLocked(guildID).policy()
 }
 
 // Stale implements rooms.Voice.
@@ -156,19 +186,58 @@ func (b *Bot) Stale(guildID string) bool {
 // Member implements rooms.Voice. Someone the bot has not seen since its
 // last snapshot (they linked Discord while in voice) is looked up once.
 func (b *Bot) Member(ctx context.Context, guildID, channelID, userID string) rooms.VoiceMember {
+	if err := b.lookUp(ctx, guildID, userID); err != nil {
+		return rooms.VoiceMember{Stale: true}
+	}
 	b.mu.Lock()
+	defer b.mu.Unlock()
 	g := b.guilds[guildID]
 	if g == nil {
 		// Before the first connection nothing is known; after it, the bot is
 		// not in this server.
-		defer b.mu.Unlock()
 		return rooms.VoiceMember{Stale: !b.readyOnce}
 	}
-	if g.members[userID] != nil || g.lookedUp[userID] || g.stale() || b.api == nil {
-		defer b.mu.Unlock()
-		return g.voiceMember(channelID, userID, b.now())
+	return g.voiceMember(channelID, userID, b.now())
+}
+
+// Channel implements rooms.Voice: the tracked voice channel the user is in,
+// in one of the bot's servers. guilds are the user's servers, where they
+// are looked up if the bot has not seen them yet.
+func (b *Bot) Channel(ctx context.Context, userID string, guilds []string) (guildID, channelID string, ok bool) {
+	for _, id := range guilds {
+		if err := b.lookUp(ctx, id, userID); err != nil {
+			continue
+		}
 	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, g := range b.guilds {
+		if m := g.members[userID]; m != nil && m.channelID != "" && b.trackedLocked(g, m.channelID) {
+			return g.id, m.channelID, true
+		}
+	}
+	return "", "", false
+}
+
+// trackedLocked reports whether the bot makes rooms for a voice channel.
+func (b *Bot) trackedLocked(g *guild, channelID string) bool {
+	ch := g.channels[channelID]
+	if ch == nil || !ch.voice {
+		return false
+	}
+	return b.settingsLocked(g.id).tracks(channelID)
+}
+
+// lookUp asks Discord for the voice state of a user the bot has not seen in
+// a server since its snapshot, once per snapshot.
+func (b *Bot) lookUp(ctx context.Context, guildID, userID string) error {
+	b.mu.Lock()
+	g := b.guilds[guildID]
+	need := g != nil && g.members[userID] == nil && !g.lookedUp[userID] && !g.stale() && b.api != nil
 	b.mu.Unlock()
+	if !need {
+		return nil
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, lookupTimeout)
 	defer cancel()
@@ -176,20 +245,20 @@ func (b *Bot) Member(ctx context.Context, guildID, channelID, userID string) roo
 	if err == nil && vs != nil && vs.Member == nil {
 		vs.Member, err = b.api.GuildMember(ctx, guildID, userID)
 	}
+	if err != nil {
+		slog.WarnContext(ctx, "looking up a discord voice state failed", "guild", guildID, "err", err)
+		return err
+	}
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if err != nil {
-		slog.WarnContext(ctx, "looking up a discord voice state failed", "guild", guildID, "err", err)
-		return rooms.VoiceMember{Stale: true}
-	}
 	if b.guilds[guildID] == g && g.members[userID] == nil && !g.lookedUp[userID] {
 		g.lookedUp[userID] = true
 		if vs != nil && vs.ChannelID != "" {
 			g.setVoice(userID, vs.ChannelID, vs.Member, b.now())
 		}
 	}
-	return g.voiceMember(channelID, userID, b.now())
+	return nil
 }
 
 // recheck is work to do after an event: rooms to check again, now and
@@ -198,6 +267,9 @@ type recheck struct {
 	guildID  string
 	channels []string // nil: every room in the server
 	delays   []time.Duration
+	// end ends the rooms' streams first, with this reason: the bot was
+	// removed or the channel deleted.
+	end string
 }
 
 var (
@@ -279,7 +351,25 @@ func (b *Bot) onReady(e *discordgo.Ready) []recheck {
 		}
 	}
 	slog.Info("discord bot connected", "servers", len(e.Guilds))
+	for i := range todo {
+		todo[i].end = gateway.EndDiscordBotRemoved
+	}
+	// Streams restored after a restart, in servers the bot left meanwhile.
+	for _, room := range b.liveRooms() {
+		if !in[room.GuildID.String] && b.guilds[room.GuildID.String] == nil {
+			todo = append(todo, recheck{guildID: room.GuildID.String, channels: []string{room.ChannelID.String}, delays: []time.Duration{0}, end: gateway.EndDiscordBotRemoved})
+		}
+	}
 	return todo
+}
+
+// liveRooms lists the Discord rooms with a live stream.
+func (b *Bot) liveRooms() []store.Room {
+	rs, err := b.db.ListLiveDiscordRooms(b.ctx)
+	if err != nil {
+		slog.Error("listing live discord rooms failed", "err", err)
+	}
+	return rs
 }
 
 func (b *Bot) onResumed() []recheck {
@@ -343,6 +433,17 @@ func (b *Bot) onGuildCreate(dg *discordgo.Guild) []recheck {
 	if err != nil {
 		slog.Error("loading a discord server's settings failed", "guild", dg.ID, "err", err)
 	}
+	todo := []recheck{{guildID: dg.ID, delays: afterResync}}
+	channels := map[string]bool{}
+	for _, c := range dg.Channels {
+		channels[c.ID] = true
+	}
+	for _, room := range b.liveRooms() {
+		if room.GuildID.String == dg.ID && !channels[room.ChannelID.String] {
+			// Deleted while the bot was away.
+			todo = append(todo, recheck{guildID: dg.ID, channels: []string{room.ChannelID.String}, delays: []time.Duration{0}, end: gateway.EndDiscordChannelDeleted})
+		}
+	}
 
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -388,7 +489,7 @@ func (b *Bot) onGuildCreate(dg *discordgo.Guild) []recheck {
 	g.synced = true
 	b.guilds[dg.ID] = g
 	b.updateStaleLocked(g)
-	return []recheck{{guildID: dg.ID, delays: afterResync}}
+	return todo
 }
 
 func (b *Bot) onGuildUpdate(dg *discordgo.Guild) []recheck {
@@ -420,7 +521,7 @@ func (b *Bot) onGuildDelete(dg *discordgo.Guild) []recheck {
 	}
 	delete(b.guilds, dg.ID)
 	slog.Info("discord bot removed from a server", "guild", dg.ID)
-	return []recheck{{guildID: dg.ID, delays: []time.Duration{0}}}
+	return []recheck{{guildID: dg.ID, delays: []time.Duration{0}, end: gateway.EndDiscordBotRemoved}}
 }
 
 func (b *Bot) onRole(guildID, roleID string, perms int64, deleted bool) []recheck {
@@ -456,6 +557,9 @@ func (b *Bot) onChannel(c *discordgo.Channel, deleted bool) []recheck {
 		g.channels[c.ID] = newChannel(c)
 	}
 	g.noteVideoLoss(before, now)
+	if deleted {
+		return []recheck{{guildID: g.id, channels: []string{c.ID}, delays: []time.Duration{0}, end: gateway.EndDiscordChannelDeleted}}
+	}
 	return []recheck{{guildID: g.id, channels: []string{c.ID}, delays: afterPermChange}}
 }
 
@@ -494,17 +598,66 @@ func (b *Bot) onVoiceState(vs *discordgo.VoiceState) []recheck {
 	return todo
 }
 
-// schedule checks the rooms of r again after each of its delays.
-func (b *Bot) schedule(r recheck) {
-	for _, d := range r.delays {
-		if d > 0 {
-			d += graceMargin
+// refreshStreamers fetches the members streaming in Discord rooms again:
+// without the privileged GUILD_MEMBERS intent, the bot only sees someone's
+// roles change with their next voice state.
+func (b *Bot) refreshStreamers(ctx context.Context) {
+	rows, err := b.db.ListLiveDiscordStreamers(ctx)
+	if err != nil {
+		slog.Error("listing discord streamers failed", "err", err)
+		return
+	}
+	for _, r := range rows {
+		cctx, cancel := context.WithTimeout(ctx, lookupTimeout)
+		dm, err := b.api.GuildMember(cctx, r.GuildID.String, r.DiscordID)
+		cancel()
+		if err != nil {
+			slog.Warn("refreshing a discord member failed", "guild", r.GuildID.String, "err", err)
+			continue
 		}
-		b.after(d, func() { b.reevaluate(r.guildID, r.channels) })
+		for _, rc := range b.onMember(r.GuildID.String, r.DiscordID, dm) {
+			b.schedule(rc)
+		}
 	}
 }
 
-func (b *Bot) reevaluate(guildID string, channels []string) {
+// onMember applies a member's roles fetched over HTTP.
+func (b *Bot) onMember(guildID, userID string, dm *discordgo.Member) []recheck {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	g := b.guilds[guildID]
+	if g == nil || g.stale() {
+		return nil
+	}
+	m := g.members[userID]
+	if m == nil || m.channelID == "" {
+		return nil
+	}
+	now := b.now()
+	before := g.canVideo(now)
+	_, _, changed := g.setVoice(userID, m.channelID, dm, now)
+	g.noteVideoLoss(before, now)
+	if !changed {
+		return nil
+	}
+	return []recheck{{guildID: guildID, channels: []string{m.channelID}, delays: afterPermChange}}
+}
+
+// schedule checks the rooms of r again after each of its delays.
+func (b *Bot) schedule(r recheck) {
+	for i, d := range r.delays {
+		if d > 0 {
+			d += graceMargin
+		}
+		end := ""
+		if i == 0 {
+			end = r.end
+		}
+		b.after(d, func() { b.reevaluate(r.guildID, r.channels, end) })
+	}
+}
+
+func (b *Bot) reevaluate(guildID string, channels []string, end string) {
 	ctx := b.ctx
 	var list []store.Room
 	if channels == nil {
@@ -527,6 +680,9 @@ func (b *Bot) reevaluate(guildID string, channels []string) {
 		}
 	}
 	for _, room := range list {
+		if end != "" {
+			b.EndStreams(ctx, room, end)
+		}
 		b.Reevaluate(ctx, room)
 	}
 }

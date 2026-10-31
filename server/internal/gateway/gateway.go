@@ -87,6 +87,10 @@ const (
 	EndAccessRevoked = "access_revoked"
 	// Discord rooms: the streamer left the voice channel.
 	EndLeftVoice = "left_voice"
+	// Discord rooms: the bot was removed from the server, or the voice
+	// channel was deleted.
+	EndDiscordBotRemoved     = "discord_bot_removed"
+	EndDiscordChannelDeleted = "discord_channel_deleted"
 )
 
 type liveStream struct {
@@ -152,6 +156,9 @@ type Gateway struct {
 	streams  map[string]*liveStream // by stream ID
 	sessions map[string]*session    // by MediaMTX session ID
 	early    map[string]earlyEvent  // by MediaMTX session ID
+	// obsBlocks: until when a user's OBS may only reconnect into a Discord
+	// room, by user ID (see blockOBS).
+	obsBlocks map[string]time.Time
 
 	// changes is signalled when streams start, end or change state, or their
 	// viewers change (see Changes).
@@ -173,10 +180,11 @@ type Gateway struct {
 func New(db *store.DB, mtx *mediamtx.Client, rs *rooms.Service, publicURL *url.URL) *Gateway {
 	return &Gateway{
 		db: db, mtx: mtx, rooms: rs, publicURL: publicURL, now: time.Now,
-		streams:  map[string]*liveStream{},
-		sessions: map[string]*session{},
-		early:    map[string]earlyEvent{},
-		changes:  make(chan struct{}, 1),
+		streams:   map[string]*liveStream{},
+		sessions:  map[string]*session{},
+		early:     map[string]earlyEvent{},
+		obsBlocks: map[string]time.Time{},
+		changes:   make(chan struct{}, 1),
 	}
 }
 
@@ -567,6 +575,13 @@ func (g *Gateway) EndStream(ctx context.Context, streamID, reason string) {
 	}
 }
 
+// EndRoomStreams ends every stream in a room.
+func (g *Gateway) EndRoomStreams(ctx context.Context, roomID, reason string) {
+	for _, ls := range g.RoomStreams(roomID) {
+		g.EndStream(ctx, ls.Stream.ID, reason)
+	}
+}
+
 // EndUserStreams ends every stream of userID.
 func (g *Gateway) EndUserStreams(ctx context.Context, userID, reason string) {
 	if s := g.activeStreamOf(userID); s != nil {
@@ -633,10 +648,12 @@ func (g *Gateway) Reevaluate(ctx context.Context, room store.Room) {
 	}
 	var viewers []viewer
 	streamers := map[string]string{} // stream ID -> user ID
+	obs := map[string]bool{}         // stream IDs from OBS
 	g.mu.Lock()
 	for id, s := range g.streams {
 		if s.rec.RoomID == room.ID {
 			streamers[id] = s.rec.UserID
+			obs[id] = s.rec.Source == string(SourceOBS)
 		}
 	}
 	for id, sess := range g.sessions {
@@ -660,6 +677,9 @@ func (g *Gateway) Reevaluate(ctx context.Context, room store.Room) {
 		switch check(userID, access.Stream) {
 		case access.OK, access.DiscordReconnecting:
 		case access.JoinVoiceChannel:
+			if obs[streamID] {
+				g.blockOBS(userID)
+			}
 			g.EndStream(ctx, streamID, EndLeftVoice)
 		default:
 			g.EndStream(ctx, streamID, EndAccessRevoked)

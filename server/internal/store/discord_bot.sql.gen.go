@@ -188,6 +188,81 @@ func (q *Queries) ListDiscordRooms(ctx context.Context, guildID sql.NullString) 
 	return items, nil
 }
 
+const listLiveDiscordRooms = `-- name: ListLiveDiscordRooms :many
+SELECT id, kind, slug, owner_id, visibility, guild_id, channel_id, created_at FROM rooms
+WHERE kind = 'discord' AND id IN (SELECT room_id FROM streams WHERE ended_at IS NULL)
+`
+
+// Discord rooms with a live stream.
+func (q *Queries) ListLiveDiscordRooms(ctx context.Context) ([]Room, error) {
+	rows, err := q.db.QueryContext(ctx, listLiveDiscordRooms)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Room{}
+	for rows.Next() {
+		var i Room
+		if err := rows.Scan(
+			&i.ID,
+			&i.Kind,
+			&i.Slug,
+			&i.OwnerID,
+			&i.Visibility,
+			&i.GuildID,
+			&i.ChannelID,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listLiveDiscordStreamers = `-- name: ListLiveDiscordStreamers :many
+SELECT rooms.guild_id, identities.subject AS discord_id
+FROM streams
+JOIN rooms ON rooms.id = streams.room_id
+JOIN identities ON identities.user_id = streams.user_id AND identities.provider = 'discord'
+WHERE streams.ended_at IS NULL AND rooms.kind = 'discord'
+`
+
+type ListLiveDiscordStreamersRow struct {
+	GuildID   sql.NullString
+	DiscordID string
+}
+
+// The Discord accounts of people streaming in a Discord room.
+func (q *Queries) ListLiveDiscordStreamers(ctx context.Context) ([]ListLiveDiscordStreamersRow, error) {
+	rows, err := q.db.QueryContext(ctx, listLiveDiscordStreamers)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListLiveDiscordStreamersRow{}
+	for rows.Next() {
+		var i ListLiveDiscordStreamersRow
+		if err := rows.Scan(&i.GuildID, &i.DiscordID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const updateDiscordGuild = `-- name: UpdateDiscordGuild :exec
 UPDATE discord_guilds SET stream_policy = ?, announce = ?, tracked_channels = ? WHERE guild_id = ?
 `

@@ -114,6 +114,9 @@ func run() error {
 			gw.Reevaluate(ctx, room)
 			hub.Reevaluate(ctx, room)
 		}
+		bot.EndStreams = func(ctx context.Context, room store.Room, reason string) {
+			gw.EndRoomStreams(ctx, room.ID, reason)
+		}
 		roomService.SetVoice(bot)
 		go func() {
 			if err := bot.Run(ctx); err != nil {
