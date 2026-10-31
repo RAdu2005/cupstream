@@ -27,7 +27,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev \
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
-            gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-nice \
+            gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-nice gstreamer1.0-pipewire \
             libpipewire-0.3-dev libclang-dev pkg-config \
             libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
       - uses: jdx/mise-action@v5
@@ -47,6 +47,7 @@ jobs:
       - name: Encoders on this runner
         timeout-minutes: 5
         run: target/debug/cupstream-cli encoders
+      - run: target/debug/cupstream-cli check
 
       # Pipeline smoke test: a test source published through /whip into
       # the real server and MediaMTX, and a WHEP viewer that must decode it.
@@ -123,15 +124,35 @@ jobs:
       - name: Encoders on this runner
         timeout-minutes: 5
         run: target/debug/cupstream-cli encoders
+      # The installer ships a trimmed GStreamer runtime (docs/desktop-app.md).
+      - name: GStreamer bundle
+        shell: pwsh
+        run: scripts/gstreamer-bundle.ps1 -GstRoot C:\gstreamer -Exe target\debug\cupstream-cli.exe -Out app\src-tauri\gstreamer
       - name: Installer
         working-directory: companion/app
         run: npx tauri build --bundles nsis
+      # Installs it and checks, with no other GStreamer on PATH, that the
+      # bundle has every element the app uses.
+      - name: Installed bundle
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          $dir = "$env:RUNNER_TEMP\cupstream"
+          $setup = Get-ChildItem target\release\bundle\nsis\*.exe | Select-Object -First 1
+          "installer: {0:N1} MB" -f ($setup.Length / 1MB)
+          Start-Process $setup.FullName -ArgumentList '/S', "/D=$dir" -Wait
+          Copy-Item target\debug\cupstream-cli.exe $dir
+          $env:Path = ($env:Path -split ';' | Where-Object { $_ -notmatch 'gstreamer' }) -join ';'
+          & "$dir\cupstream-cli.exe" check
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          & "$dir\cupstream-cli.exe" encoders
       - uses: actions/upload-artifact@v4
         with:
           name: cupstream-app-windows
           path: companion/target/release/bundle/nsis/*.exe
-      # For testing on a Windows machine without a Rust toolchain: it needs
-      # the GStreamer runtime installed, with its bin directory on PATH.
+      # For testing on a Windows machine without a Rust toolchain: put it in
+      # the app's installation directory to use the bundled GStreamer, or
+      # install the GStreamer runtime and put its bin directory on PATH.
       - uses: actions/upload-artifact@v4
         with:
           name: cupstream-cli-windows
