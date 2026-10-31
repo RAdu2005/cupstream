@@ -13,6 +13,22 @@ import (
 	"github.com/RAdu2005/cupstream/server/internal/view"
 )
 
+func (s *Server) accountRoutes(mux *http.ServeMux) {
+	mux.Handle("GET /api/account", requireUser(s.account))
+	mux.Handle("PATCH /api/account", requireUser(s.updateProfile))
+	mux.Handle("PATCH /api/account/settings", requireUser(s.updateSettings))
+	mux.Handle("DELETE /api/account/identities/{provider}", requireUser(s.unlink))
+	mux.Handle("GET /api/account/sessions", requireUser(s.listSessions))
+	mux.Handle("DELETE /api/account/sessions/{id}", requireUser(s.revokeSession))
+	mux.Handle("GET /api/account/guilds", requireUser(s.listGuilds))
+	mux.Handle("PATCH /api/account/guilds/{id}", requireUser(s.updateGuild))
+	mux.Handle("GET /api/account/merge", requireUser(s.pendingMerge))
+	mux.Handle("POST /api/account/merge", requireUser(s.confirmMerge))
+	mux.Handle("DELETE /api/account/merge", requireUser(s.cancelMerge))
+	mux.Handle("GET /api/account/stream-key", requireUser(s.streamKey))
+	mux.Handle("POST /api/account/stream-key", requireUser(s.regenerateStreamKey))
+}
+
 func (s *Server) account(w http.ResponseWriter, r *http.Request, cur auth.Current) {
 	ctx := r.Context()
 	ids, err := s.DB.ListIdentities(ctx, cur.User.ID)

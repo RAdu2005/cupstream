@@ -10,6 +10,12 @@ import (
 	"github.com/RAdu2005/cupstream/server/internal/store"
 )
 
+func (s *Server) discordRoutes(mux *http.ServeMux) {
+	mux.Handle("GET /api/rooms/{slug}/discord", requireUser(s.roomDiscord))
+	mux.Handle("GET /api/streams/{id}/viewers", requireUser(s.streamViewers))
+	mux.Handle("POST /api/streams/{id}/move", requireUser(s.moveStream))
+}
+
 // DiscordNames gives the names of the Discord servers and channels the bot
 // is in (package discord).
 type DiscordNames interface {

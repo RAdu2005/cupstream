@@ -4,6 +4,87 @@ export type AuthProvider = 'dev' | 'google' | 'discord';
 export type Visibility = 'everyone' | 'signed_in' | 'invite_only';
 
 //////////
+// source: account.go
+
+/**
+ * Identity is a sign-in method linked to the account.
+ */
+export interface Identity {
+  provider: AuthProvider;
+  username: string;
+}
+export interface Settings {
+  /**
+   * Where a new stream goes: a Discord room when possible, or always the
+   * user's link room.
+   */
+  startMode: 'discord_auto' | 'link';
+  /**
+   * What OBS does when Discord (auto) finds no Discord room.
+   */
+  obsFallback: 'link' | 'refuse';
+}
+/**
+ * Account is the response of GET /api/account.
+ */
+export interface Account {
+  user: User;
+  identities: Identity[];
+  settings: Settings;
+  roomSlug: string; // the user's link room
+}
+export interface UpdateProfileRequest {
+  handle: string;
+  displayName: string;
+}
+/**
+ * Session is a signed-in browser or desktop app. Times are Unix seconds.
+ */
+export interface Session {
+  id: string;
+  kind: 'web' | 'app';
+  deviceName: string;
+  createdAt: number /* int64 */;
+  lastSeenAt: number /* int64 */;
+  current: boolean;
+}
+/**
+ * Guild is one of the user's Discord servers.
+ */
+export interface Guild {
+  id: string;
+  name: string;
+  iconUrl?: string;
+  approxMembers: number /* int64 */;
+  suggestionsEnabled: boolean;
+}
+export interface UpdateGuildRequest {
+  suggestionsEnabled: boolean;
+}
+/**
+ * PendingMerge is offered after linking an identity that belongs to another
+ * account. Confirming moves that account's sign-in methods here and deletes
+ * it, with its room and stream key.
+ */
+export interface PendingMerge {
+  provider: AuthProvider;
+  username: string;
+  other: User;
+}
+export interface StreamKeyInfo {
+  hasKey: boolean;
+  createdAt?: number /* int64 */;
+  whipUrl: string;
+}
+/**
+ * NewStreamKey is returned once, when a key is generated.
+ */
+export interface NewStreamKey {
+  key: string;
+  whipUrl: string;
+}
+
+//////////
 // source: admin.go
 
 /**
@@ -41,6 +122,182 @@ export interface AdminStream {
 export interface BannedUser {
   user: User;
   bannedAt: number /* int64 */;
+}
+
+//////////
+// source: app.go
+
+/**
+ * AppAuthorizeRequest is the body of POST /api/app/authorize: the signed-in
+ * user approves the desktop app's sign-in request, whose parameters the app
+ * put in the /app/authorize page's query string.
+ */
+export interface AppAuthorizeRequest {
+  redirectUri: string; // the app's loopback address
+  state: string;
+  codeChallenge: string;
+  codeChallengeMethod: 'S256';
+  deviceName: string;
+}
+/**
+ * AppAuthorizeResponse tells the page where to send the browser: the app's
+ * redirect URI with a one-time code and the state.
+ */
+export interface AppAuthorizeResponse {
+  redirect: string;
+}
+/**
+ * AppTokenRequest is the body of POST /api/app/token, sent by the desktop
+ * app to exchange its code.
+ */
+export interface AppTokenRequest {
+  code: string;
+  codeVerifier: string;
+  redirectUri: string;
+}
+/**
+ * AppToken is the desktop app's session: it sends the token as a Bearer
+ * token on /api/ requests, and the user can revoke it in their settings.
+ */
+export interface AppToken {
+  token: string;
+  user: User;
+}
+/**
+ * AppInstance is one of the user's desktop apps that is running and
+ * connected. ID is its session's ID.
+ */
+export interface AppInstance {
+  id: string;
+  deviceName: string;
+}
+/**
+ * AppsEvent lists the user's running desktop apps. Each of the user's
+ * connections gets it when it connects and whenever the list changes, so
+ * the website can offer going live from the app.
+ */
+export interface AppsEvent {
+  type: 'apps';
+  apps: AppInstance[];
+}
+/**
+ * AppGoLive asks the desktop app to open its screen picker and go live,
+ * after the user chose the app on the website (client message appGoLive).
+ * Room is the room to stream into; empty means the user's start mode.
+ */
+export interface AppGoLive {
+  type: 'goLive';
+  room?: string;
+}
+
+//////////
+// source: auth.go
+
+/**
+ * Me is the response of GET /api/me.
+ */
+export interface Me {
+  user: User;
+  /**
+   * Admin is set for admins (CUPSTREAM_ADMINS), who see the admin page.
+   */
+  admin?: boolean;
+}
+/**
+ * AuthProviders is the response of GET /api/auth/providers: the sign-in
+ * methods this server offers.
+ */
+export interface AuthProviders {
+  providers: AuthProvider[];
+}
+/**
+ * DevLoginRequest is the body of POST /api/auth/dev/login.
+ */
+export interface DevLoginRequest {
+  handle: string;
+}
+
+//////////
+// source: bans.go
+
+/**
+ * BanEntry is someone banned from a link room. BannedAt is Unix seconds.
+ */
+export interface BanEntry {
+  user: User;
+  bannedAt: number /* int64 */;
+}
+
+//////////
+// source: discord.go
+
+/**
+ * DiscordChannel is a Discord room's voice channel, also served at
+ * GET /api/rooms/{slug}/discord to people who may not enter yet. The server
+ * and channel names are only given to members of the server.
+ */
+export interface DiscordChannel {
+  guildName?: string;
+  channelName?: string;
+  guildIconUrl?: string;
+  /**
+   * URL opens the voice channel in Discord.
+   */
+  url: string;
+}
+/**
+ * StreamGrace tells a streamer, on every tab, that their stream in a
+ * Discord room ends in EndsInMs milliseconds because they left the voice
+ * channel. 0 means they are back and it goes on.
+ */
+export interface StreamGrace {
+  type: 'streamGrace';
+  roomSlug: string;
+  streamId: string;
+  endsInMs: number /* int64 */;
+}
+/**
+ * StreamViewer is someone watching a stream, as listed to its streamer by
+ * GET /api/streams/{id}/viewers before moving it to their link room.
+ */
+export interface StreamViewer {
+  user: User;
+  /**
+   * Allowed: they may already enter the streamer's link room.
+   */
+  allowed: boolean;
+}
+/**
+ * MoveStreamRequest is the body of POST /api/streams/{id}/move, which moves
+ * the streamer's stream from a Discord room into their link room.
+ */
+export interface MoveStreamRequest {
+  /**
+   * Visibility "everyone" opens the link room to everyone; empty keeps it.
+   */
+  visibility?: 'everyone' | '';
+  /**
+   * Viewers who keep watching: until the stream ends, or always (added to
+   * the allowed list). The others are paused.
+   */
+  viewers: MoveViewer[];
+}
+export interface MoveViewer {
+  userId: string;
+  always?: boolean;
+}
+export interface MoveStreamResponse {
+  roomSlug: string;
+}
+/**
+ * StreamMoved tells a room's subscribers that a stream moved to another
+ * room, where the people its streamer let in can follow it.
+ */
+export interface StreamMoved {
+  type: 'streamMoved';
+  room: string;
+  streamId: string;
+  toRoom: string;
 }
 
 //////////
@@ -137,263 +394,51 @@ export interface RoomRef {
 }
 
 //////////
-// source: types.go
-/*
-Package api holds the JSON types of the HTTP API. TypeScript types for the
-website are generated from this package (tygo.yaml), so keep it free of
-logic.
-*/
+// source: home.go
 
 /**
- * User is a CupStream account as other users see it.
+ * HomeRoom is a room on the home page, with its active streams.
  */
-export interface User {
-  id: string;
-  handle: string;
-  displayName: string;
-  avatarUrl?: string;
-}
-/**
- * Me is the response of GET /api/me.
- */
-export interface Me {
-  user: User;
-  /**
-   * Admin is set for admins (CUPSTREAM_ADMINS), who see the admin page.
-   */
-  admin?: boolean;
-}
-/**
- * AuthProviders is the response of GET /api/auth/providers: the sign-in
- * methods this server offers.
- */
-export interface AuthProviders {
-  providers: AuthProvider[];
-}
-/**
- * DevLoginRequest is the body of POST /api/auth/dev/login.
- */
-export interface DevLoginRequest {
-  handle: string;
-}
-/**
- * AppAuthorizeRequest is the body of POST /api/app/authorize: the signed-in
- * user approves the desktop app's sign-in request, whose parameters the app
- * put in the /app/authorize page's query string.
- */
-export interface AppAuthorizeRequest {
-  redirectUri: string; // the app's loopback address
-  state: string;
-  codeChallenge: string;
-  codeChallengeMethod: 'S256';
-  deviceName: string;
-}
-/**
- * AppAuthorizeResponse tells the page where to send the browser: the app's
- * redirect URI with a one-time code and the state.
- */
-export interface AppAuthorizeResponse {
-  redirect: string;
-}
-/**
- * AppTokenRequest is the body of POST /api/app/token, sent by the desktop
- * app to exchange its code.
- */
-export interface AppTokenRequest {
-  code: string;
-  codeVerifier: string;
-  redirectUri: string;
-}
-/**
- * AppToken is the desktop app's session: it sends the token as a Bearer
- * token on /api/ requests, and the user can revoke it in their settings.
- */
-export interface AppToken {
-  token: string;
-  user: User;
-}
-/**
- * Health is the response of GET /healthz.
- */
-export interface Health {
-  status: 'ok' | 'degraded';
-  version: string; // commit the server was built from, or "dev"
-  database: boolean;
-  mediamtx: MediaMTXHealth;
-}
-export interface MediaMTXHealth {
-  reachable: boolean;
-  version?: string;
-  /**
-   * Features of CupStream's MediaMTX build; without them the server closes
-   * sessions instead of pausing them and polls instead of following events.
-   */
-  pause: boolean;
-  events: boolean;
-}
-/**
- * ErrorResponse is the body of every non-2xx JSON response.
- */
-export interface ErrorResponse {
-  error: string;
-  /**
-   * Code is a machine-readable reason when the client can act on it, e.g.
-   * "sign_in_required", "not_allowed", "already_live".
-   */
-  code?: string;
-}
-/**
- * Identity is a sign-in method linked to the account.
- */
-export interface Identity {
-  provider: AuthProvider;
-  username: string;
-}
-export interface Settings {
-  /**
-   * Where a new stream goes: a Discord room when possible, or always the
-   * user's link room.
-   */
-  startMode: 'discord_auto' | 'link';
-  /**
-   * What OBS does when Discord (auto) finds no Discord room.
-   */
-  obsFallback: 'link' | 'refuse';
-}
-/**
- * Account is the response of GET /api/account.
- */
-export interface Account {
-  user: User;
-  identities: Identity[];
-  settings: Settings;
-  roomSlug: string; // the user's link room
-}
-export interface UpdateProfileRequest {
-  handle: string;
-  displayName: string;
-}
-/**
- * Session is a signed-in browser or desktop app. Times are Unix seconds.
- */
-export interface Session {
-  id: string;
-  kind: 'web' | 'app';
-  deviceName: string;
-  createdAt: number /* int64 */;
-  lastSeenAt: number /* int64 */;
-  current: boolean;
-}
-/**
- * Guild is one of the user's Discord servers.
- */
-export interface Guild {
-  id: string;
-  name: string;
-  iconUrl?: string;
-  approxMembers: number /* int64 */;
-  suggestionsEnabled: boolean;
-}
-export interface UpdateGuildRequest {
-  suggestionsEnabled: boolean;
-}
-/**
- * PendingMerge is offered after linking an identity that belongs to another
- * account. Confirming moves that account's sign-in methods here and deletes
- * it, with its room and stream key.
- */
-export interface PendingMerge {
-  provider: AuthProvider;
-  username: string;
-  other: User;
-}
-export interface StreamKeyInfo {
-  hasKey: boolean;
-  createdAt?: number /* int64 */;
-  whipUrl: string;
-}
-/**
- * NewStreamKey is returned once, when a key is generated.
- */
-export interface NewStreamKey {
-  key: string;
-  whipUrl: string;
-}
-/**
- * Permissions says what the viewer may do in a room.
- */
-export interface Permissions {
-  watch: boolean;
-  stream: boolean;
-  chat: boolean;
-  moderateStreams: boolean;
-  moderateChat: boolean;
-}
-export interface Stream {
-  id: string;
-  user: User;
-  source: 'app' | 'web' | 'obs';
-  state: 'starting' | 'live' | 'reconnecting';
-  startedAt: number /* int64 */;
-  /**
-   * Viewers counts sessions receiving media; paused ones do not count.
-   */
-  viewers: number /* int */;
-  /**
-   * Bitrate the server receives from the streamer, in bits per second.
-   */
-  bitrate: number /* int64 */;
-  /**
-   * LossRatio of the streamer's packets on the way to the server (0-1).
-   */
-  lossRatio: number /* float64 */;
-  /**
-   * KeyFrameInterval is the longest recent interval between key frames,
-   * in seconds, when known. OBS ignores requests for key frames, so new
-   * viewers of an OBS stream wait up to this long for the picture.
-   */
-  keyFrameInterval?: number /* float64 */;
-  /**
-   * ThumbnailAt is when the stream's latest thumbnail arrived (Unix
-   * milliseconds), or 0 without one. The picture is at
-   * GET /api/streams/{id}/thumbnail; app and web senders upload it.
-   */
-  thumbnailAt?: number /* int64 */;
-}
-/**
- * PauseTracks is the optional body of POST /api/media/{stream}/whep/{secret}/pause
- * and .../resume. Without it, video and audio are both selected.
- */
-export interface PauseTracks {
-  video?: boolean;
-  audio?: boolean;
-}
-/**
- * Room is the response of GET /api/rooms/{slug}.
- */
-export interface Room {
-  id: string;
+export interface HomeRoom {
   slug: string;
   kind: 'link' | 'discord';
   owner?: User; // link rooms
-  visibility?: Visibility; // link rooms
-  permissions: Permissions;
+  /**
+   * Access says why the user may enter: their own room, the allowed list,
+   * or a pass (an invite link). Empty for rooms reached through a friend.
+   */
+  access?: 'own' | 'allowed' | 'pass';
+  canStream: boolean;
   streams: Stream[];
   /**
    * Discord rooms: the voice channel.
    */
   discord?: DiscordChannel;
 }
-export interface UpdateRoomRequest {
-  visibility: Visibility;
+/**
+ * Home is the response of GET /api/home.
+ */
+export interface Home {
+  /**
+   * Voice is the room of the Discord voice channel the user is in, when
+   * the CupStream bot is in that server.
+   */
+  voice?: HomeRoom;
+  /**
+   * The user's link room first, then the rooms they may enter, live ones
+   * first.
+   */
+  rooms: HomeRoom[];
+  /**
+   * FriendsLive are other rooms where friends are live now and the user
+   * may watch (friends only see each other live where they are allowed).
+   */
+  friendsLive: HomeRoom[];
 }
-export interface AllowedEntry {
-  user: User;
-  canStream: boolean;
-}
-export interface SetAllowedRequest {
-  canStream: boolean;
-}
+
+//////////
+// source: invites.go
+
 /**
  * Invite is an invite link to a link room. The link itself is only shown
  * once, when it is created. Times are Unix seconds.
@@ -446,80 +491,10 @@ export interface InvitePreview {
 export interface RedeemedInvite {
   roomSlug: string;
 }
-/**
- * BanEntry is someone banned from a link room. BannedAt is Unix seconds.
- */
-export interface BanEntry {
-  user: User;
-  bannedAt: number /* int64 */;
-}
-/**
- * HomeRoom is a room on the home page, with its active streams.
- */
-export interface HomeRoom {
-  slug: string;
-  kind: 'link' | 'discord';
-  owner?: User; // link rooms
-  /**
-   * Access says why the user may enter: their own room, the allowed list,
-   * or a pass (an invite link). Empty for rooms reached through a friend.
-   */
-  access?: 'own' | 'allowed' | 'pass';
-  canStream: boolean;
-  streams: Stream[];
-  /**
-   * Discord rooms: the voice channel.
-   */
-  discord?: DiscordChannel;
-}
-/**
- * Home is the response of GET /api/home.
- */
-export interface Home {
-  /**
-   * Voice is the room of the Discord voice channel the user is in, when
-   * the CupStream bot is in that server.
-   */
-  voice?: HomeRoom;
-  /**
-   * The user's link room first, then the rooms they may enter, live ones
-   * first.
-   */
-  rooms: HomeRoom[];
-  /**
-   * FriendsLive are other rooms where friends are live now and the user
-   * may watch (friends only see each other live where they are allowed).
-   */
-  friendsLive: HomeRoom[];
-}
-/**
- * StartStreamRequest is the body of POST /api/streams (app and web senders).
- */
-export interface StartStreamRequest {
-  source: 'app' | 'web';
-  /**
-   * Room is a room slug; empty follows the start mode.
-   */
-  room?: string;
-  /**
-   * LinkFallback accepts the link room when no Discord room is possible.
-   */
-  linkFallback?: boolean;
-  /**
-   * Replace ends the user's current stream elsewhere.
-   */
-  replace?: boolean;
-}
-/**
- * StartStreamResponse tells the sender where to publish: POST the WHIP
- * offer to WhipURL with "Authorization: Bearer <token>".
- */
-export interface StartStreamResponse {
-  stream: Stream;
-  roomSlug: string;
-  whipUrl: string;
-  token: string;
-}
+
+//////////
+// source: realtime.go
+
 /**
  * ClientMessage is a message from the browser.
  */
@@ -700,32 +675,6 @@ export interface ChatDeleted {
   id: string;
 }
 /**
- * AppInstance is one of the user's desktop apps that is running and
- * connected. ID is its session's ID.
- */
-export interface AppInstance {
-  id: string;
-  deviceName: string;
-}
-/**
- * AppsEvent lists the user's running desktop apps. Each of the user's
- * connections gets it when it connects and whenever the list changes, so
- * the website can offer going live from the app.
- */
-export interface AppsEvent {
-  type: 'apps';
-  apps: AppInstance[];
-}
-/**
- * AppGoLive asks the desktop app to open its screen picker and go live,
- * after the user chose the app on the website (client message appGoLive).
- * Room is the room to stream into; empty means the user's start mode.
- */
-export interface AppGoLive {
-  type: 'goLive';
-  room?: string;
-}
-/**
  * RealtimeError answers a client message that failed. Code is e.g.
  * "rate_limited", "sign_in_required", "not_allowed", "app_offline" or
  * "invalid".
@@ -737,71 +686,162 @@ export interface RealtimeError {
   code: string;
   error: string;
 }
+
+//////////
+// source: rooms.go
+
 /**
- * DiscordChannel is a Discord room's voice channel, also served at
- * GET /api/rooms/{slug}/discord to people who may not enter yet. The server
- * and channel names are only given to members of the server.
+ * Permissions says what the viewer may do in a room.
  */
-export interface DiscordChannel {
-  guildName?: string;
-  channelName?: string;
-  guildIconUrl?: string;
+export interface Permissions {
+  watch: boolean;
+  stream: boolean;
+  chat: boolean;
+  moderateStreams: boolean;
+  moderateChat: boolean;
+}
+/**
+ * Room is the response of GET /api/rooms/{slug}.
+ */
+export interface Room {
+  id: string;
+  slug: string;
+  kind: 'link' | 'discord';
+  owner?: User; // link rooms
+  visibility?: Visibility; // link rooms
+  permissions: Permissions;
+  streams: Stream[];
   /**
-   * URL opens the voice channel in Discord.
+   * Discord rooms: the voice channel.
    */
-  url: string;
+  discord?: DiscordChannel;
 }
-/**
- * StreamGrace tells a streamer, on every tab, that their stream in a
- * Discord room ends in EndsInMs milliseconds because they left the voice
- * channel. 0 means they are back and it goes on.
- */
-export interface StreamGrace {
-  type: 'streamGrace';
-  roomSlug: string;
-  streamId: string;
-  endsInMs: number /* int64 */;
+export interface UpdateRoomRequest {
+  visibility: Visibility;
 }
-/**
- * StreamViewer is someone watching a stream, as listed to its streamer by
- * GET /api/streams/{id}/viewers before moving it to their link room.
- */
-export interface StreamViewer {
+export interface AllowedEntry {
   user: User;
+  canStream: boolean;
+}
+export interface SetAllowedRequest {
+  canStream: boolean;
+}
+
+//////////
+// source: streams.go
+
+export interface Stream {
+  id: string;
+  user: User;
+  source: 'app' | 'web' | 'obs';
+  state: 'starting' | 'live' | 'reconnecting';
+  startedAt: number /* int64 */;
   /**
-   * Allowed: they may already enter the streamer's link room.
+   * Viewers counts sessions receiving media; paused ones do not count.
    */
-  allowed: boolean;
+  viewers: number /* int */;
+  /**
+   * Bitrate the server receives from the streamer, in bits per second.
+   */
+  bitrate: number /* int64 */;
+  /**
+   * LossRatio of the streamer's packets on the way to the server (0-1).
+   */
+  lossRatio: number /* float64 */;
+  /**
+   * KeyFrameInterval is the longest recent interval between key frames,
+   * in seconds, when known. OBS ignores requests for key frames, so new
+   * viewers of an OBS stream wait up to this long for the picture.
+   */
+  keyFrameInterval?: number /* float64 */;
+  /**
+   * ThumbnailAt is when the stream's latest thumbnail arrived (Unix
+   * milliseconds), or 0 without one. The picture is at
+   * GET /api/streams/{id}/thumbnail; app and web senders upload it.
+   */
+  thumbnailAt?: number /* int64 */;
 }
 /**
- * MoveStreamRequest is the body of POST /api/streams/{id}/move, which moves
- * the streamer's stream from a Discord room into their link room.
+ * PauseTracks is the optional body of POST /api/media/{stream}/whep/{secret}/pause
+ * and .../resume. Without it, video and audio are both selected.
  */
-export interface MoveStreamRequest {
-  /**
-   * Visibility "everyone" opens the link room to everyone; empty keeps it.
-   */
-  visibility?: 'everyone' | '';
-  /**
-   * Viewers who keep watching: until the stream ends, or always (added to
-   * the allowed list). The others are paused.
-   */
-  viewers: MoveViewer[];
+export interface PauseTracks {
+  video?: boolean;
+  audio?: boolean;
 }
-export interface MoveViewer {
-  userId: string;
-  always?: boolean;
+/**
+ * StartStreamRequest is the body of POST /api/streams (app and web senders).
+ */
+export interface StartStreamRequest {
+  source: 'app' | 'web';
+  /**
+   * Room is a room slug; empty follows the start mode.
+   */
+  room?: string;
+  /**
+   * LinkFallback accepts the link room when no Discord room is possible.
+   */
+  linkFallback?: boolean;
+  /**
+   * Replace ends the user's current stream elsewhere.
+   */
+  replace?: boolean;
 }
-export interface MoveStreamResponse {
+/**
+ * StartStreamResponse tells the sender where to publish: POST the WHIP
+ * offer to WhipURL with "Authorization: Bearer <token>".
+ */
+export interface StartStreamResponse {
+  stream: Stream;
   roomSlug: string;
+  whipUrl: string;
+  token: string;
+}
+
+//////////
+// source: types.go
+/*
+Package api holds the JSON types of the HTTP API. TypeScript types for the
+website are generated from this package (tygo.yaml), so keep it free of
+logic.
+*/
+
+/**
+ * User is a CupStream account as other users see it.
+ */
+export interface User {
+  id: string;
+  handle: string;
+  displayName: string;
+  avatarUrl?: string;
 }
 /**
- * StreamMoved tells a room's subscribers that a stream moved to another
- * room, where the people its streamer let in can follow it.
+ * Health is the response of GET /healthz.
  */
-export interface StreamMoved {
-  type: 'streamMoved';
-  room: string;
-  streamId: string;
-  toRoom: string;
+export interface Health {
+  status: 'ok' | 'degraded';
+  version: string; // commit the server was built from, or "dev"
+  database: boolean;
+  mediamtx: MediaMTXHealth;
+}
+export interface MediaMTXHealth {
+  reachable: boolean;
+  version?: string;
+  /**
+   * Features of CupStream's MediaMTX build; without them the server closes
+   * sessions instead of pausing them and polls instead of following events.
+   */
+  pause: boolean;
+  events: boolean;
+}
+/**
+ * ErrorResponse is the body of every non-2xx JSON response.
+ */
+export interface ErrorResponse {
+  error: string;
+  /**
+   * Code is a machine-readable reason when the client can act on it, e.g.
+   * "sign_in_required", "not_allowed", "already_live".
+   */
+  code?: string;
 }
