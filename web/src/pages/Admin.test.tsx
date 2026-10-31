@@ -14,7 +14,7 @@ const bob = { id: 'u2', handle: 'bob', displayName: 'Bob' };
 const overview: AdminOverview = {
   streams: [
     {
-      stream: { id: 's1', user: bob, source: 'obs', state: 'live', startedAt: 1, viewers: 3, bitrate: 8e6, lossRatio: 0 },
+      stream: { id: 's1', user: bob, source: 'obs', state: 'live', startedAt: 1, viewers: 3, bitrate: 8e6, lossRatio: 0, lowQuality: 'none' },
       roomSlug: 'bobs-room',
       outgoing: 24e6,
     },

@@ -135,10 +135,12 @@ func (g *Gateway) updateTargetsLocked(now time.Time) {
 		return gr.watching > 1 && gr.congested == gr.watching
 	}
 
+	// Viewers of the low-quality version receive another encoding, whose
+	// sender adapts it on its own.
 	type tally struct{ viewers, congested int }
 	tallies := map[string]*tally{}
 	for _, sess := range g.sessions {
-		if !sess.watching() || overCapacity(sess) {
+		if !sess.watching() || sess.variant != VariantMain || overCapacity(sess) {
 			continue
 		}
 		t := tallies[sess.streamID]

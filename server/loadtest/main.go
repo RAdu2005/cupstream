@@ -41,6 +41,14 @@ type options struct {
 	height    int
 	fps       int
 
+	// The low-quality version each publisher also sends (lowBitrate 0:
+	// none), and the share of viewers that watch it.
+	lowBitrate int
+	lowWidth   int
+	lowHeight  int
+	lowFPS     int
+	lowShare   float64
+
 	viewers int
 	ramp    float64 // viewers per second
 	hold    time.Duration
@@ -61,6 +69,10 @@ func main() {
 	kbps := flag.Int("bitrate", 8000, "bitrate of each synthetic stream, kbit/s")
 	size := flag.String("size", "1920x1080", "picture size of the synthetic streams")
 	flag.IntVar(&o.fps, "fps", 60, "frame rate of the synthetic streams")
+	lowKbps := flag.Int("low-bitrate", 0, "also publish a low-quality version of each synthetic stream at this many kbit/s (0: none)")
+	lowSize := flag.String("low-size", "1280x720", "picture size of the low-quality versions")
+	flag.IntVar(&o.lowFPS, "low-fps", 30, "frame rate of the low-quality versions")
+	flag.Float64Var(&o.lowShare, "low-viewers", 0, "share of viewers (0-1) that watch the low-quality version")
 	flag.IntVar(&o.viewers, "viewers", 50, "viewers to open, spread over the streams")
 	flag.Float64Var(&o.ramp, "ramp", 5, "viewers opened per second")
 	flag.DurationVar(&o.hold, "hold", 20*time.Second, "how long to keep all viewers after the ramp")
@@ -82,6 +94,13 @@ func main() {
 		log.Fatalf("-size %q is not WIDTHxHEIGHT", *size)
 	}
 	o.bitrate = *kbps * 1000
+	o.lowBitrate = *lowKbps * 1000
+	if _, err := fmt.Sscanf(*lowSize, "%dx%d", &o.lowWidth, &o.lowHeight); err != nil {
+		log.Fatalf("-low-size %q is not WIDTHxHEIGHT", *lowSize)
+	}
+	if o.lowShare < 0 || o.lowShare > 1 {
+		log.Fatalf("-low-viewers %v is not between 0 and 1", o.lowShare)
+	}
 	for id := range strings.SplitSeq(*ids, ",") {
 		if id = strings.TrimSpace(id); id != "" {
 			o.streamIDs = append(o.streamIDs, id)
@@ -113,13 +132,20 @@ func run(ctx context.Context, o options) error {
 	streams := o.streamIDs
 	var pubs []*publisher
 	if len(streams) == 0 {
+		var low *clip // declared before the variable clip shadows the type
 		clip, err := encodeClip(ctx, o)
 		if err != nil {
 			return err
 		}
 		log.Printf("clip: %d frames, %.1f Mbit/s", len(clip.frames), float64(clip.bitrate())/1e6)
+		if o.lowBitrate > 0 {
+			if low, err = encodeClipAt(ctx, o.lowWidth, o.lowHeight, o.lowFPS, o.lowBitrate); err != nil {
+				return err
+			}
+			log.Printf("low-quality clip: %d frames, %.1f Mbit/s", len(low.frames), float64(low.bitrate())/1e6)
+		}
 		for i := range o.streams {
-			p, err := publish(ctx, o, clip, fmt.Sprintf("loadtest_pub_%d", i+1))
+			p, err := publish(ctx, o, clip, low, fmt.Sprintf("loadtest_pub_%d", i+1))
 			if err != nil {
 				return fmt.Errorf("publisher %d: %w", i+1, err)
 			}
@@ -165,11 +191,13 @@ func run(ctx context.Context, o options) error {
 				continue
 			}
 			id := streams[opened%len(streams)]
+			// Every viewer whose share passes the next whole number watches low.
+			low := int(float64(opened+1)*o.lowShare) > int(float64(opened)*o.lowShare)
 			opened++
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				rep.add(watch(ctx, o, id))
+				rep.add(watch(ctx, o, id, low))
 			}()
 		case <-tick.C:
 			rep.line(time.Since(start))

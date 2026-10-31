@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,6 +16,7 @@ import (
 // arrives, the packets lost, and when the first keyframe came.
 type viewer struct {
 	streamID string
+	low      bool // watches the low-quality version
 	location string
 	pc       *webrtc.PeerConnection
 	hc       *http.Client
@@ -36,8 +38,9 @@ type viewer struct {
 // open to everyone. With -prewarm it opens paused without a preview frame
 // and resumes a second later, like a room page switching to a pre-warmed
 // stream.
-func watch(ctx context.Context, o options, id string) *viewer {
-	v := &viewer{streamID: id, hc: newClient(), opened: time.Now()}
+// With low, it watches the stream's low-quality version.
+func watch(ctx context.Context, o options, id string, low bool) *viewer {
+	v := &viewer{streamID: id, hc: newClient(), opened: time.Now(), low: low}
 	pc, err := newAPI(o).NewPeerConnection(webrtc.Configuration{})
 	if err != nil {
 		v.err = err
@@ -52,9 +55,17 @@ func watch(ctx context.Context, o options, id string) *viewer {
 	}
 	pc.OnTrack(func(t *webrtc.TrackRemote, _ *webrtc.RTPReceiver) { go v.read(t) })
 
-	target := o.server.JoinPath("/api/streams", id, "whep").String()
+	q := url.Values{}
+	if low {
+		q.Set("quality", "low")
+	}
 	if o.paused {
-		target += "?paused=true&preview=false"
+		q.Set("paused", "true")
+		q.Set("preview", "false")
+	}
+	target := o.server.JoinPath("/api/streams", id, "whep").String()
+	if len(q) > 0 {
+		target += "?" + q.Encode()
 	}
 	if v.location, v.err = negotiate(ctx, v.hc, pc, target, ""); v.err != nil {
 		return v

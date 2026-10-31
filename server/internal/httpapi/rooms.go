@@ -39,6 +39,10 @@ func (s *Server) mediaRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /api/media/{stream}/{kind}/{secret}", s.Gateway.HandleSession)
 	mux.HandleFunc("DELETE /api/media/{stream}/{kind}/{secret}", s.Gateway.HandleSession)
 	mux.HandleFunc("POST /api/media/{stream}/whep/{secret}/{action}", s.Gateway.HandleSessionControl)
+	// The same for low-quality versions.
+	mux.HandleFunc("PATCH /api/media/{stream}/{variant}/{kind}/{secret}", s.Gateway.HandleSession)
+	mux.HandleFunc("DELETE /api/media/{stream}/{variant}/{kind}/{secret}", s.Gateway.HandleSession)
+	mux.HandleFunc("POST /api/media/{stream}/{variant}/whep/{secret}/{action}", s.Gateway.HandleSessionControl)
 
 	// Stream thumbnails: the sender uploads them with its publish token.
 	mux.HandleFunc("PUT /api/streams/{id}/thumbnail", s.Gateway.HandleThumbnailUpload)
@@ -261,6 +265,7 @@ func (s *Server) startStream(w http.ResponseWriter, r *http.Request, cur auth.Cu
 	whip := url.URL{Scheme: s.Config.PublicURL.Scheme, Host: s.Config.PublicURL.Host, Path: "/api/streams/" + started.Stream.ID + "/whip"}
 	writeJSON(w, http.StatusCreated, api.StartStreamResponse{
 		Stream: st, RoomSlug: started.Room.Slug, WhipURL: whip.String(), Token: started.Token,
+		LowQuality: api.LowQualityOffer{Publish: s.Gateway.LowEnabled},
 	})
 }
 

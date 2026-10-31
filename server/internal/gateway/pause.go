@@ -137,7 +137,7 @@ func (g *Gateway) SetViewerPaused(ctx context.Context, streamID, secret string, 
 		return errTooManyStreams
 	}
 	g.mu.Unlock()
-	if !paused && t.Video && before.Video && !g.admit(streamID) {
+	if !paused && t.Video && before.Video && !g.admit(streamID, sess.variant) {
 		return errServerFull
 	}
 
@@ -219,12 +219,13 @@ func (g *Gateway) release(ctx context.Context, mtxID string) {
 }
 
 // HandleSessionControl serves POST /api/media/{stream}/whep/{secret}/pause
-// and .../resume. The optional body {"video": bool, "audio": bool} selects
+// and .../resume, with the variant before "whep" for a low-quality version
+// (/api/media/{stream}/low/whep/{secret}/pause). The optional body {"video": bool, "audio": bool} selects
 // the tracks; without it, both are selected. Like PATCH and DELETE, the
 // secret in the URL authorizes the request.
 func (g *Gateway) HandleSessionControl(w http.ResponseWriter, r *http.Request) {
 	streamID, secret, action := r.PathValue("stream"), r.PathValue("secret"), r.PathValue("action")
-	if !reStreamID.MatchString(streamID) || !reSecret.MatchString(secret) || (action != "pause" && action != "resume") {
+	if _, ok := sessionVariant(r); !ok || !reStreamID.MatchString(streamID) || !reSecret.MatchString(secret) || (action != "pause" && action != "resume") {
 		writeErr(w, http.StatusNotFound, "", "no such session")
 		return
 	}

@@ -2,8 +2,8 @@
 // request passes through it to MediaMTX, which listens on localhost only.
 //
 // The gateway decides access, gives each stream its own MediaMTX path
-// (s/<streamId>) and records every session so it can pause or end it when
-// access changes. It follows MediaMTX's event stream for live state,
+// (s/<streamId>, and s/<streamId>/low for its low-quality version) and
+// records every session so it can pause or end it when access changes. It follows MediaMTX's event stream for live state,
 // re-synchronizing with one list call after each (re)connection, and polls
 // every two seconds when the event stream is unavailable.
 package gateway
@@ -102,12 +102,17 @@ type liveStream struct {
 	thumb *Thumbnail
 	// The sender's bitrate target (app and web streams).
 	bitrate bitrateControl
+	// The sender's low-quality version: whether MediaMTX reports it online,
+	// and what it receives from it.
+	lowOnline bool
+	lowStats  streamStats
 }
 
 type session struct {
 	mtxID     string // MediaMTX session ID, from the ID response header
 	secret    string // from the Location header; empty for sessions adopted after a restart
 	streamID  string
+	variant   Variant
 	publish   bool
 	userID    string // viewer ("" for anonymous) or publisher
 	tab       string // the viewer's browser tab, if it said (see CloseTabSessions)
@@ -141,6 +146,10 @@ type LiveStream struct {
 	State   State
 	Viewers int
 	Stats   StreamStats
+	// Low says what viewers get if they pick the low-quality version, and
+	// LowBitrate is what the server receives of a sent one.
+	Low        LowQuality
+	LowBitrate int64
 	// ThumbnailAt is when the latest thumbnail arrived; zero without one.
 	ThumbnailAt time.Time
 }
@@ -177,6 +186,10 @@ type Gateway struct {
 	// Admission, when set, refuses viewers near the bandwidth limit (see
 	// admission.go). Set it before serving.
 	Admission Admission
+
+	// LowEnabled accepts low-quality versions from senders and offers them
+	// to viewers (CUPSTREAM_LOW_QUALITY; see low.go). Set it before serving.
+	LowEnabled bool
 }
 
 func New(db *store.DB, mtx *mediamtx.Client, rs *rooms.Service, publicURL *url.URL) *Gateway {
@@ -202,10 +215,6 @@ func (g *Gateway) changed() {
 	default:
 	}
 }
-
-func mtxPath(streamID string) string { return "s/" + streamID }
-
-func streamIDFromPath(p string) (string, bool) { return strings.CutPrefix(p, "s/") }
 
 var idEncoding = base32.StdEncoding.WithPadding(base32.NoPadding)
 
@@ -383,7 +392,8 @@ func (g *Gateway) Reconcile(ctx context.Context) error {
 
 	g.mu.Lock()
 	for id, s := range g.streams {
-		g.setOnlineLocked(s, online[mtxPath(id)], now)
+		g.setOnlineLocked(s, online[mtxPath(id, VariantMain)], now)
+		g.setLowOnlineLocked(s, online[mtxPath(id, VariantLow)])
 	}
 
 	present := map[string]bool{}
@@ -394,14 +404,14 @@ func (g *Gateway) Reconcile(ctx context.Context) error {
 			continue
 		}
 		// Unknown session: one we created before a restart, or a stray.
-		streamID, ok := streamIDFromPath(ms.Path)
+		streamID, variant, ok := parsePath(ms.Path)
 		if _, live := g.streams[streamID]; !ok || !live {
 			kicks = append(kicks, ms.ID)
 			continue
 		}
 		q, _ := url.ParseQuery(ms.Query)
 		g.sessions[ms.ID] = &session{
-			mtxID: ms.ID, streamID: streamID, publish: ms.State == "publish",
+			mtxID: ms.ID, streamID: streamID, variant: variant, publish: ms.State == "publish",
 			userID: q.Get("u"), tab: q.Get("t"), created: ms.Created, confirmed: true,
 			// After a restart a held viewer looks paused by themselves; resuming
 			// checks access again, so they cannot resume without it.
@@ -434,9 +444,15 @@ func (g *Gateway) HandleEvent(ctx context.Context, e mediamtx.Event) {
 	defer g.mu.Unlock()
 	switch e.Type {
 	case mediamtx.EventStreamOnline, mediamtx.EventStreamOffline:
-		id, ok := streamIDFromPath(e.Path)
-		if s := g.streams[id]; ok && s != nil {
-			g.setOnlineLocked(s, e.Type == mediamtx.EventStreamOnline, now)
+		id, variant, ok := parsePath(e.Path)
+		s := g.streams[id]
+		if !ok || s == nil {
+			break
+		}
+		if up := e.Type == mediamtx.EventStreamOnline; variant == VariantLow {
+			g.setLowOnlineLocked(s, up)
+		} else {
+			g.setOnlineLocked(s, up, now)
 		}
 	case mediamtx.EventSessionCreated:
 		id := e.SessionID()
@@ -771,7 +787,10 @@ func (g *Gateway) CloseViewerSessions(ctx context.Context, roomID, userID string
 }
 
 func (g *Gateway) snapshotLocked(id string, s *liveStream, counts map[string]int) LiveStream {
-	ls := LiveStream{Stream: s.rec, State: s.state, Viewers: counts[id], Stats: s.stats.public()}
+	ls := LiveStream{
+		Stream: s.rec, State: s.state, Viewers: counts[id], Stats: s.stats.public(),
+		Low: g.lowQualityLocked(s), LowBitrate: s.lowStats.pub.Bitrate,
+	}
 	if s.thumb != nil {
 		ls.ThumbnailAt = s.thumb.At
 	}

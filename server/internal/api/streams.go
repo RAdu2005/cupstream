@@ -20,6 +20,13 @@ type Stream struct {
 	// milliseconds), or 0 without one. The picture is at
 	// GET /api/streams/{id}/thumbnail; app and web senders upload it.
 	ThumbnailAt int64 `json:"thumbnailAt,omitempty"`
+	// LowQuality says what a viewer gets if they pick the low-quality
+	// version (POST /api/streams/{id}/whep?quality=low): none, one the
+	// sender publishes, or one the server transcodes while someone watches.
+	LowQuality string `json:"lowQuality" tstype:"'none' | 'sent' | 'transcoded'"`
+	// LowBitrate is what the server receives of a sent low-quality
+	// version, in bits per second, when known.
+	LowBitrate int64 `json:"lowBitrate,omitempty"`
 }
 
 // PauseTracks is the optional body of POST /api/media/{stream}/whep/{secret}/pause
@@ -43,8 +50,17 @@ type StartStreamRequest struct {
 // StartStreamResponse tells the sender where to publish: POST the WHIP
 // offer to WhipURL with "Authorization: Bearer <token>".
 type StartStreamResponse struct {
-	Stream   Stream `json:"stream"`
-	RoomSlug string `json:"roomSlug"`
-	WhipURL  string `json:"whipUrl"`
-	Token    string `json:"token"`
+	Stream     Stream          `json:"stream"`
+	RoomSlug   string          `json:"roomSlug"`
+	WhipURL    string          `json:"whipUrl"`
+	Token      string          `json:"token"`
+	LowQuality LowQualityOffer `json:"lowQuality"`
+}
+
+// LowQualityOffer tells a sender whether to publish a low-quality version.
+// When Publish is set, the server accepts one at WhipURL + "?quality=low",
+// with the same token, once the stream itself is being published; it ends
+// with the stream, and can end alone.
+type LowQualityOffer struct {
+	Publish bool `json:"publish"`
 }

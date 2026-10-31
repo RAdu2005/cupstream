@@ -26,7 +26,7 @@ const friends: Friends = {
 };
 const live: LiveFriend[] = [
   {
-    stream: { id: 's1', user: bob, source: 'obs', state: 'live', startedAt: 1, viewers: 0, bitrate: 0, lossRatio: 0 },
+    stream: { id: 's1', user: bob, source: 'obs', state: 'live', startedAt: 1, viewers: 0, bitrate: 0, lossRatio: 0, lowQuality: 'none' },
     room: { slug: 'bbb', kind: 'link', owner: bob },
   },
 ];

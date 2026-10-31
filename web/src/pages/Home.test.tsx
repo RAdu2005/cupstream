@@ -21,6 +21,7 @@ const live = (u: ReturnType<typeof user>, viewers: number): Stream => ({
   viewers,
   bitrate: 0,
   lossRatio: 0,
+  lowQuality: 'none',
 });
 
 function setup(home: Home) {

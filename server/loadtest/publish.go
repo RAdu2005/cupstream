@@ -48,6 +48,11 @@ func (c *clip) bitrate() int {
 // Baseline, no B-frames, a keyframe every two seconds. It is cached in the
 // temporary directory.
 func encodeClip(ctx context.Context, o options) (*clip, error) {
+	return encodeClipAt(ctx, o.width, o.height, o.fps, o.bitrate)
+}
+
+func encodeClipAt(ctx context.Context, width, height, fps, bitrate int) (*clip, error) {
+	o := options{width: width, height: height, fps: fps, bitrate: bitrate}
 	name := fmt.Sprintf("cupstream-loadtest-%dx%d-%d-%d.h264", o.width, o.height, o.fps, o.bitrate)
 	path := filepath.Join(os.TempDir(), name)
 	if _, err := os.Stat(path); err != nil {
@@ -112,23 +117,31 @@ type publisher struct {
 	streamID string
 	hc       *http.Client
 	o        options
-	pc       *webrtc.PeerConnection
-	cancel   context.CancelFunc
-	plis     atomic.Int64
+	senders  []*sender // the stream, and its low-quality version if any
+}
+
+// sender is one WHIP session sending a clip.
+type sender struct {
+	pc     *webrtc.PeerConnection
+	cancel context.CancelFunc
+	plis   atomic.Int64
 }
 
 // publish signs in as handle, opens their room to everyone, starts a
 // stream and sends the clip to it over WHIP, like the browser's go-live
 // dialog. Keyframe requests are answered by jumping to the next keyframe.
-func publish(ctx context.Context, o options, c *clip, handle string) (*publisher, error) {
+// With a low clip, it also publishes the stream's low-quality version, like
+// the desktop app.
+func publish(ctx context.Context, o options, c, low *clip, handle string) (*publisher, error) {
 	hc := newClient()
 	if err := postJSON(ctx, hc, o, "/api/auth/dev/login", map[string]string{"handle": handle}, nil); err != nil {
 		return nil, err
 	}
 	var started struct {
-		Stream   struct{ ID string }
-		RoomSlug string
-		Token    string
+		Stream     struct{ ID string }
+		RoomSlug   string
+		Token      string
+		LowQuality struct{ Publish bool }
 	}
 	if err := postJSON(ctx, hc, o, "/api/streams", map[string]any{"source": "web", "room": "", "linkFallback": true, "replace": true}, &started); err != nil {
 		return nil, err
@@ -137,25 +150,48 @@ func publish(ctx context.Context, o options, c *clip, handle string) (*publisher
 		return nil, err
 	}
 
-	pc, err := newAPI(o).NewPeerConnection(webrtc.Configuration{})
-	if err != nil {
+	p := &publisher{streamID: started.Stream.ID, hc: hc, o: o}
+	whip := o.server.JoinPath("/api/streams", p.streamID, "whip").String()
+	if err := p.add(ctx, c, whip, started.Token); err != nil {
+		p.close()
 		return nil, err
+	}
+	if low != nil {
+		if !started.LowQuality.Publish {
+			p.close()
+			return nil, errors.New("the server does not accept low-quality versions (CUPSTREAM_LOW_QUALITY=off)")
+		}
+		if err := p.add(ctx, low, whip+"?quality=low", started.Token); err != nil {
+			p.close()
+			return nil, fmt.Errorf("low-quality version: %w", err)
+		}
+	}
+	return p, nil
+}
+
+// add opens a WHIP session at target and sends the clip to it.
+func (p *publisher) add(ctx context.Context, c *clip, target, token string) error {
+	pc, err := newAPI(p.o).NewPeerConnection(webrtc.Configuration{})
+	if err != nil {
+		return err
 	}
 	track, err := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 90000,
 		SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f"}, "video", "loadtest")
 	if err != nil {
-		return nil, err
+		pc.Close()
+		return err
 	}
 	tr, err := pc.AddTransceiverFromTrack(track, webrtc.RTPTransceiverInit{Direction: webrtc.RTPTransceiverDirectionSendonly})
 	if err != nil {
-		return nil, err
+		pc.Close()
+		return err
 	}
-	pctx, cancel := context.WithCancel(ctx)
-	p := &publisher{streamID: started.Stream.ID, hc: hc, o: o, pc: pc, cancel: cancel}
+	sctx, cancel := context.WithCancel(ctx)
+	s := &sender{pc: pc, cancel: cancel}
+	p.senders = append(p.senders, s)
 
-	if _, err := negotiate(ctx, hc, pc, o.server.JoinPath("/api/streams", p.streamID, "whip").String(), started.Token); err != nil {
-		p.close()
-		return nil, err
+	if _, err := negotiate(ctx, p.hc, pc, target, token); err != nil {
+		return err
 	}
 	go func() {
 		for {
@@ -166,16 +202,16 @@ func publish(ctx context.Context, o options, c *clip, handle string) (*publisher
 			for _, pkt := range pkts {
 				switch pkt.(type) {
 				case *rtcp.PictureLossIndication, *rtcp.FullIntraRequest:
-					p.plis.Add(1)
+					s.plis.Add(1)
 				}
 			}
 		}
 	}()
-	go p.send(pctx, c, track)
-	return p, nil
+	go s.send(sctx, c, track)
+	return nil
 }
 
-func (p *publisher) send(ctx context.Context, c *clip, track *webrtc.TrackLocalStaticSample) {
+func (p *sender) send(ctx context.Context, c *clip, track *webrtc.TrackLocalStaticSample) {
 	d := time.Second / time.Duration(c.fps)
 	t := time.NewTicker(d)
 	defer t.Stop()
@@ -206,8 +242,10 @@ func (p *publisher) send(ctx context.Context, c *clip, track *webrtc.TrackLocalS
 }
 
 func (p *publisher) close() {
-	p.cancel()
-	p.pc.Close()
+	for _, s := range p.senders {
+		s.cancel()
+		s.pc.Close()
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	sendJSON(ctx, p.hc, p.o, http.MethodDelete, "/api/streams/"+p.streamID, nil, nil)

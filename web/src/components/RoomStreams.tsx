@@ -1,11 +1,22 @@
 import clsx from 'clsx';
 import { AlertTriangle, LayoutGrid, Radio, Square, Users, View } from 'lucide-react';
-import { useEffect, useMemo, useReducer, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from 'react';
 import { useMe } from '@/api/auth';
 import { useEndStream } from '@/api/rooms';
 import type { Room, Stream, ViewerStats } from '@/api/types.gen';
-import { formatMbps, overCapacity } from '@/lib/bandwidth';
-import { RoomSessions, type SessionView } from '@/lib/roomSessions';
+import { formatMbps, overCapacity, SENDER_LOSS, STATS_INTERVAL_MS } from '@/lib/bandwidth';
+import {
+  bitrateOf,
+  hasLow,
+  loadChoice,
+  qualityOf,
+  saveChoice,
+  stepAuto,
+  viewerBottleneck,
+  type AutoState,
+  type QualityChoice,
+} from '@/lib/quality';
+import { RoomSessions, type Quality, type SessionView } from '@/lib/roomSessions';
 import {
   canPlayMore,
   initialView,
@@ -60,13 +71,41 @@ export function RoomStreams({ room, viewerStats }: { room: Room; viewerStats: Re
   const idsKey = ids.join(',');
   useEffect(() => dispatch({ type: 'streams', ids: idsKey ? idsKey.split(',') : [] }), [idsKey]);
   const wanted = useMemo(() => wants(view, ids, hidden), [view, ids, hidden]);
-  useEffect(() => sessions?.update(streams, wanted), [sessions, streams, wanted]);
+
+  // Quality: each stream starts with the browser's remembered choice.
+  const [defaultChoice] = useState(loadChoice);
+  const [choices, setChoices] = useState<Record<string, QualityChoice>>({});
+  const [auto, setAuto] = useState<AutoState>({});
+  const choiceOf = (id: string) => choices[id] ?? defaultChoice;
+  const qualities = useMemo(() => {
+    const out: Record<string, Quality> = {};
+    for (const s of streams) out[s.id] = qualityOf(s, choices[s.id] ?? defaultChoice, !!auto[s.id]?.low);
+    return out;
+  }, [streams, choices, defaultChoice, auto]);
+
+  useEffect(() => sessions?.update(streams, wanted, qualities), [sessions, streams, wanted, qualities]);
   const bw = useBandwidth(
     room.slug,
     sessions,
     ids.filter((id) => wanted[id] === 'playing'),
   );
   const [warning, setWarning] = useState<{ stream: Stream; needBps: number; capacityBps: number } | null>(null);
+
+  // Auto switches streams to their low-quality version while the viewer's
+  // connection is the bottleneck, and tries the source again later.
+  const autoInputs = useRef({ streams, wanted, choices, defaultChoice, verdict: bw.verdict });
+  autoInputs.current = { streams, wanted, choices, defaultChoice, verdict: bw.verdict };
+  useEffect(() => {
+    const tick = () => {
+      const { streams, wanted, choices, defaultChoice, verdict } = autoInputs.current;
+      const playing = streams.filter((s) => wanted[s.id] === 'playing');
+      const choiceMap = Object.fromEntries(streams.map((s) => [s.id, choices[s.id] ?? defaultChoice]));
+      setAuto((a) => stepAuto(a, playing, choiceMap, viewerBottleneck(verdict, playing), Date.now()));
+    };
+    tick();
+    const t = setInterval(tick, STATS_INTERVAL_MS);
+    return () => clearInterval(t);
+  }, [bw.verdict]);
 
   if (streams.length === 0) {
     return (
@@ -83,6 +122,14 @@ export function RoomStreams({ room, viewerStats }: { room: Room; viewerStats: Re
   const others = streams.filter((s) => !view.watched.includes(s.id));
   const full = !canPlayMore(view);
   const playingNow = watched.filter((s) => !view.paused[s.id]);
+  const bitrate = (s: Stream) => bitrateOf(s, qualities[s.id] ?? 'source');
+  // Playing streams that could switch to a low-quality version.
+  const couldGoLow = playingNow.filter((s) => hasLow(s) && qualities[s.id] !== 'low');
+
+  function choose(id: string, choice: QualityChoice) {
+    setChoices((c) => ({ ...c, [id]: choice }));
+    saveChoice(choice);
+  }
 
   /**
    * Opens a stream, first warning the viewer if their connection would not
@@ -95,9 +142,9 @@ export function RoomStreams({ room, viewerStats }: { room: Room; viewerStats: Re
       return;
     }
     const capacityBps = await bw.ensureCapacity();
-    const playingBps = playingNow.reduce((sum, p) => sum + p.bitrate, 0);
-    if (capacityBps !== null && overCapacity(capacityBps, playingBps, s.bitrate)) {
-      setWarning({ stream: s, needBps: playingBps + s.bitrate, capacityBps });
+    const playingBps = playingNow.reduce((sum, p) => sum + bitrate(p), 0);
+    if (capacityBps !== null && overCapacity(capacityBps, playingBps, bitrate(s))) {
+      setWarning({ stream: s, needBps: playingBps + bitrate(s), capacityBps });
       return;
     }
     dispatch({ type: 'watch', id: s.id });
@@ -117,6 +164,8 @@ export function RoomStreams({ room, viewerStats }: { room: Room; viewerStats: Re
       paused={!!view.paused[s.id]}
       compact={compact}
       badge={bw.verdict.struggling.includes(s.id) ? <StrugglingBadge stream={s} /> : undefined}
+      quality={choiceOf(s.id)}
+      onQuality={(choice) => choose(s.id, choice)}
       onMute={(muted) => dispatch({ type: 'mute', id: s.id, muted })}
       onVolume={(volume) => dispatch({ type: 'volume', id: s.id, volume })}
       onPause={(paused) => dispatch({ type: 'pause', id: s.id, paused })}
@@ -137,9 +186,18 @@ export function RoomStreams({ room, viewerStats }: { room: Room; viewerStats: Re
         <div role="alert" className="flex flex-wrap items-center gap-3 rounded-lg border border-danger/50 bg-danger/10 px-4 py-3 text-sm">
           <AlertTriangle className="size-5 shrink-0 text-danger" aria-hidden />
           <p className="min-w-0 flex-1">
-            Your connection cannot keep up with {playingNow.length} streams. Pause the ones in the background (they
-            resume almost instantly) or close one.
+            Your connection cannot keep up with {playingNow.length} streams.{' '}
+            {couldGoLow.length > 0 ? 'Switch to low quality, pause' : 'Pause'} the ones in the background (they resume
+            almost instantly) or close one.
           </p>
+          {couldGoLow.length > 0 && (
+            <Button
+              variant="secondary"
+              onClick={() => setChoices((c) => ({ ...c, ...Object.fromEntries(couldGoLow.map((s) => [s.id, 'low'])) }))}
+            >
+              Switch to low quality
+            </Button>
+          )}
           {playingNow.length > 1 && (
             <Button variant="secondary" onClick={pauseBackground}>
               Pause background streams
@@ -241,7 +299,7 @@ export function RoomStreams({ room, viewerStats }: { room: Room; viewerStats: Re
  * packets from them.
  */
 function StrugglingBadge({ stream }: { stream: Stream }) {
-  const sender = stream.lossRatio >= 0.02;
+  const sender = stream.lossRatio >= SENDER_LOSS;
   return (
     <span
       className="flex items-center gap-1 rounded bg-black/70 px-1.5 py-0.5 text-xs font-semibold text-amber-300"

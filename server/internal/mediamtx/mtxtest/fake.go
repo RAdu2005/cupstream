@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -158,12 +159,15 @@ func (f *Fake) setPausedLocked(w http.ResponseWriter, r *http.Request) {
 }
 
 func (f *Fake) signal(w http.ResponseWriter, r *http.Request) {
-	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/") // s, <id>, whip|whep[, secret]
-	if len(parts) < 3 || parts[0] != "s" {
+	// s/<id>[/<variant>]/whip|whep[/secret]
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	k := slices.IndexFunc(parts, func(p string) bool { return p == "whip" || p == "whep" })
+	if k < 2 || parts[0] != "s" {
 		http.NotFound(w, r)
 		return
 	}
-	path, kind := parts[0]+"/"+parts[1], parts[2]
+	path, kind := strings.Join(parts[:k], "/"), parts[k]
+	parts = parts[k-2:] // as if the path were s/<id>
 	if len(parts) == 3 && r.Method == http.MethodPost {
 		body, _ := io.ReadAll(r.Body)
 		s := &Session{ID: uuid.NewString(), Secret: uuid.NewString(), Path: path, State: "read", Query: r.URL.RawQuery, Offer: string(body)}

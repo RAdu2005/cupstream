@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"cmp"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -19,17 +20,25 @@ type Admission interface {
 	Admit(bitrate int64) bool
 }
 
-// admit reports whether another viewer of the stream fits. Call it after
-// the viewer's other checks, since an admitted viewer reserves bandwidth.
-func (g *Gateway) admit(streamID string) bool {
+// admit reports whether another viewer of the stream's variant fits. Call
+// it after the viewer's other checks, since an admitted viewer reserves
+// bandwidth. A viewer of the low-quality version counts with its bitrate.
+func (g *Gateway) admit(streamID string, v Variant) bool {
 	if g.Admission == nil {
 		return true
 	}
 	ls, ok := g.Stream(streamID)
-	if !ok || g.Admission.Admit(ls.Stats.Bitrate) {
+	if !ok {
 		return true // a stream that ended is reported as such by the caller
 	}
-	slog.Warn("refused a viewer: the server is at its bandwidth limit", "stream", streamID, "bitrate", ls.Stats.Bitrate)
+	bitrate := ls.Stats.Bitrate
+	if v == VariantLow {
+		bitrate = cmp.Or(ls.LowBitrate, LowDefaultBitrate)
+	}
+	if g.Admission.Admit(bitrate) {
+		return true
+	}
+	slog.Warn("refused a viewer: the server is at its bandwidth limit", "stream", streamID, "variant", v, "bitrate", bitrate)
 	return false
 }
 
