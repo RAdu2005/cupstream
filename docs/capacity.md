@@ -1,0 +1,3 @@
+# Capacity
+
+The server's network connection is the limit: 1 Gbps carries about 125 viewers of an 8 Mbps stream. The server reads the outgoing traffic of the physical network interfaces every second (from `/sys/class/net`, since the service cannot see `/proc/net`), and while a new viewer would take it above `CUPSTREAM_EGRESS_LIMIT_MBPS` (800 by default) it refuses them with 503 and the code `server_full`: opening a session that plays at once, and resuming the video of a paused one. Pre-warming (opening paused) is always allowed. An admitted viewer counts with their stream's bitrate (8 Mbps when not known yet) until the counters show it, so a burst of viewers cannot all slip in at once. The startup log says which interfaces are measured.

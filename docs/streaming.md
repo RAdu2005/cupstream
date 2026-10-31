@@ -1,0 +1,3 @@
+# Streaming locally
+
+In your room's settings, generate a stream key. In OBS, choose the **WHIP** service with the server `http://localhost:5173/whip` and the key as the Bearer token; a co-streamer adds `?room=<slug>` to stream into someone else's room. Set OBS's keyframe interval to 1–2 seconds: OBS ignores requests for keyframes, so a new viewer waits up to one interval for the picture (browsers and the desktop app answer them, so their viewers start almost at once). The room API reports each stream's measured `keyFrameInterval`. Without OBS, ffmpeg 8 or later can publish a test pattern, but its WHIP client rejects ICE-over-TCP candidates, so run MediaMTX with `MTX_WEBRTCLOCALTCPADDRESS=` for that.
