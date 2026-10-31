@@ -137,9 +137,30 @@ impl Publisher {
     }
 
     pub fn start(&self) -> anyhow::Result<()> {
-        self.pipeline
-            .set_state(gst::State::Playing)
-            .map_err(|_| anyhow!("the pipeline did not start"))?;
+        // Off the async runtime, like stop: a sink that fails to start
+        // cleans up inside this call.
+        let pipeline = &self.pipeline;
+        let started =
+            std::thread::scope(|s| s.spawn(|| pipeline.set_state(gst::State::Playing)).join());
+        if !matches!(started, Ok(Ok(_))) {
+            // The element that refused posted why.
+            let why = self
+                .bus()
+                .iter_filtered(&[gst::MessageType::Error])
+                .find_map(|msg| match msg.view() {
+                    gst::MessageView::Error(e) => Some(format!(
+                        "{}: {}",
+                        msg.src().map(|s| s.name().to_string()).unwrap_or_default(),
+                        e.error()
+                    )),
+                    _ => None,
+                });
+            self.stop();
+            return Err(anyhow!(
+                "the pipeline did not start ({})",
+                why.as_deref().unwrap_or("no reason given")
+            ));
+        }
         self.keyframes_until_connected();
         Ok(())
     }
@@ -192,8 +213,17 @@ impl Publisher {
     }
 
     /// Stops publishing; whipclientsink ends the WHIP session (DELETE).
+    ///
+    /// The state change runs on its own thread: whipclientsink ends the
+    /// session with its own async runtime and must not be stopped from
+    /// inside another one (the app's and the CLI's tokio).
     pub fn stop(&self) {
-        let _ = self.pipeline.set_state(gst::State::Null);
+        let pipeline = &self.pipeline;
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                let _ = pipeline.set_state(gst::State::Null);
+            });
+        });
     }
 
     /// Writes a Graphviz file of the pipeline (GST_DEBUG_DUMP_DOT_DIR).

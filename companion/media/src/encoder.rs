@@ -167,7 +167,13 @@ impl Candidate {
     /// scaled to `height` (keeping the aspect ratio) when given. Its last
     /// element is the capsfilter "size".
     pub fn upload_description(&self, height: Option<u32>) -> String {
-        let size = height.map(|h| format!(",height={h}")).unwrap_or_default();
+        // Square pixels: given only a height, scalers otherwise keep the
+        // width and change the pixel aspect ratio, which WebRTC does not
+        // carry, so viewers would see the picture squashed.
+        let size = match height {
+            Some(h) => format!(",height={h},pixel-aspect-ratio=1/1"),
+            None => ",pixel-aspect-ratio=1/1".into(),
+        };
         match self.upload {
             // A description cannot end with bare caps, hence capsfilter.
             Upload::System => {
@@ -210,10 +216,25 @@ impl Candidate {
 
     /// Encodes test frames through the same converter until the first
     /// encoded frame comes out, to check the encoder works on this machine.
+    /// A driver that blocks (seen with hardware encoders on machines
+    /// without the GPU) is given up on after 15 seconds; its thread is left
+    /// behind rather than blocking the caller.
     pub fn probe(&self) -> anyhow::Result<()> {
         if !self.installed() {
             bail!("{} is not installed", self.factory);
         }
+        let cand = *self;
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::Builder::new()
+            .name(format!("probe-{}", self.factory))
+            .spawn(move || {
+                let _ = tx.send(cand.run_probe());
+            })?;
+        rx.recv_timeout(Duration::from_secs(15))
+            .unwrap_or_else(|_| Err(anyhow!("the encoder did not answer within 15 seconds")))
+    }
+
+    fn run_probe(&self) -> anyhow::Result<()> {
         let desc = format!(
             "videotestsrc is-live=true ! video/x-raw,width=640,height=360,framerate=30/1 ! {} ! {} name=enc ! fakesink name=out",
             self.upload_description(None),

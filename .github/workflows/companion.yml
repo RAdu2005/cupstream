@@ -16,6 +16,9 @@ defaults:
 jobs:
   linux:
     runs-on: ubuntu-24.04
+    # A hung step (a pipeline or driver that never returns) must not hold a
+    # runner for hours.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - name: GStreamer and PipeWire development files
@@ -37,6 +40,7 @@ jobs:
       - run: cargo test
       - run: cargo build --bin cupstream-cli
       - name: Encoders on this runner
+        timeout-minutes: 5
         run: target/debug/cupstream-cli encoders
 
       # Pipeline smoke test: a test source published through /whip into
@@ -54,6 +58,7 @@ jobs:
             sleep 1
           done
       - name: Publish and watch
+        timeout-minutes: 5
         run: |
           set -euo pipefail
           s=http://localhost:8080
@@ -73,6 +78,7 @@ jobs:
 
   windows:
     runs-on: windows-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
       - name: GStreamer
@@ -97,6 +103,7 @@ jobs:
       - run: cargo test
       - run: cargo build --bin cupstream-cli
       - name: Encoders on this runner
+        timeout-minutes: 5
         run: target/debug/cupstream-cli encoders
       # For testing on a Windows machine without a Rust toolchain: it needs
       # the GStreamer runtime installed, with its bin directory on PATH.
