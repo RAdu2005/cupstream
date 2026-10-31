@@ -154,6 +154,7 @@ type Gateway struct {
 
 	mu       sync.Mutex
 	features mediamtx.Features
+	version  string                 // MediaMTX's, as last detected
 	streams  map[string]*liveStream // by stream ID
 	sessions map[string]*session    // by MediaMTX session ID
 	early    map[string]earlyEvent  // by MediaMTX session ID
@@ -230,11 +231,14 @@ func (g *Gateway) DetectFeatures(ctx context.Context) {
 	}
 	f := mediamtx.FeaturesOf(info.Version)
 	g.mu.Lock()
-	changed := f != g.features
-	g.features = f
+	changed := info.Version != g.version
+	g.features, g.version = f, info.Version
 	g.mu.Unlock()
 	if changed {
 		slog.Info("MediaMTX features", "version", info.Version, "pause", f.Pause, "events", f.Events)
+		if mediamtx.Outdated(info.Version) {
+			slog.Warn("MediaMTX is older than the build CupStream pins; upgrade it (README, MediaMTX build)", "version", info.Version, "pinned", mediamtx.PinnedBuild)
+		}
 	}
 }
 

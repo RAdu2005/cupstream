@@ -38,6 +38,29 @@ func FeaturesOf(version string) Features {
 	return Features{Pause: n >= 2, Events: n >= 2}
 }
 
+// PinnedBuild is the build that deploy/mediamtx/Dockerfile and compose.yaml
+// pin, and that production should run. Older builds still work, with the
+// features they have.
+const PinnedBuild = "v1.21.2-cupstream.4"
+
+var reBuild = regexp.MustCompile(`^(v[0-9.]+)-cupstream\.(\d+)(-.*)?$`)
+
+// Outdated reports whether version is not a CupStream build, or an older
+// build of the same upstream release than PinnedBuild. Other releases are
+// not compared.
+func Outdated(version string) bool {
+	m, pin := reBuild.FindStringSubmatch(version), reBuild.FindStringSubmatch(PinnedBuild)
+	if m == nil {
+		return true
+	}
+	if m[1] != pin[1] {
+		return false
+	}
+	n, _ := strconv.Atoi(m[2])
+	p, _ := strconv.Atoi(pin[2])
+	return n < p
+}
+
 // Event types CupStream acts on; MediaMTX sends others too.
 const (
 	EventStreamOnline   = "stream.online"

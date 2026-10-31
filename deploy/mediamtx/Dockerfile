@@ -3,7 +3,7 @@
 
 FROM golang:1.27-alpine3.24 AS build
 ARG MEDIAMTX_REPO=https://github.com/RAdu2005/mediamtx.git
-ARG MEDIAMTX_REF=v1.21.2-cupstream.3
+ARG MEDIAMTX_REF=v1.21.2-cupstream.4
 RUN apk add --no-cache git
 WORKDIR /src
 RUN git clone --depth 1 --branch "$MEDIAMTX_REF" "$MEDIAMTX_REPO" .

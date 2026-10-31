@@ -8,9 +8,9 @@
 
 logLevel: info
 
-# The UDP socket that all viewers share gets a larger send buffer, so that
-# key frames going out to many viewers at once do not block it. Linux caps
-# it at net.core.wmem_max, which has to be raised on the host (see
+# The UDP sockets that viewers share get a larger send buffer, so that key
+# frames going out to many viewers at once do not block them. Linux caps it
+# at net.core.wmem_max, which has to be raised on the host (see
 # docs/mediamtx.md).
 udpWriteBufferSize: 8388608
 
@@ -37,6 +37,11 @@ webrtc: true
 webrtcAddress: 127.0.0.1:8889
 webrtcAllowOrigins: []
 webrtcLocalUDPAddress: :8189
+# Sockets sharing port 8189 (from v1.21.2-cupstream.4; Linux only), so that
+# sessions send in parallel: on a single socket every packet waits for the
+# previous one, which capped the output at about 970 Mbit/s in the load test
+# (server/loadtest). Older builds refuse this setting.
+webrtcLocalUDPSockets: 8
 webrtcLocalTCPAddress: :8189
 webrtcIPsFromInterfaces: true
 webrtcAdditionalHosts: []
