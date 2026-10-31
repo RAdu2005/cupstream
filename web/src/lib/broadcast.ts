@@ -2,6 +2,7 @@ import { api, ApiError } from '@/api/client';
 import type { StartStreamRequest, StartStreamResponse } from '@/api/types.gen';
 import { maxBitrateOf, type CaptureSettings, type Codec } from './capture';
 import { realtime } from './realtime';
+import { startThumbnails, uploadThumbnail } from './thumbnails';
 import { publishWhip, type WhipPublisher } from './whip';
 
 /**
@@ -74,6 +75,7 @@ export class Broadcast {
   private media: Media | null = null;
   private publisher: WhipPublisher | null = null;
   private unsubscribe: (() => void) | null = null;
+  private stopThumbnails: (() => void) | null = null;
   private statsTimer: ReturnType<typeof setInterval> | undefined;
   private disconnectTimer: ReturnType<typeof setTimeout> | undefined;
   /** Bumped on every new connection and on stop, so stale callbacks do nothing. */
@@ -148,6 +150,10 @@ export class Broadcast {
         this.end('Your stream has ended.');
       }
     });
+    const video = media.screen.getVideoTracks()[0];
+    if (video) {
+      this.stopThumbnails = startThumbnails(video, (jpeg) => uploadThumbnail(started.stream.id, started.token, jpeg));
+    }
     try {
       await this.connect(gen);
     } catch (err) {
@@ -354,6 +360,8 @@ export class Broadcast {
     this.publisher = null;
     this.unsubscribe?.();
     this.unsubscribe = null;
+    this.stopThumbnails?.();
+    this.stopThumbnails = null;
     removeEventListener('beforeunload', this.onBeforeUnload);
     removeEventListener('pagehide', this.onPageHide);
   }
