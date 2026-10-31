@@ -387,6 +387,36 @@ export interface BanEntry {
   bannedAt: number /* int64 */;
 }
 /**
+ * HomeRoom is a room on the home page, with its active streams.
+ */
+export interface HomeRoom {
+  slug: string;
+  kind: 'link' | 'discord';
+  owner?: User; // link rooms
+  /**
+   * Access says why the user may enter: their own room, the allowed list,
+   * or a pass (an invite link). Empty for rooms reached through a friend.
+   */
+  access?: 'own' | 'allowed' | 'pass';
+  canStream: boolean;
+  streams: Stream[];
+}
+/**
+ * Home is the response of GET /api/home.
+ */
+export interface Home {
+  /**
+   * The user's link room first, then the rooms they may enter, live ones
+   * first.
+   */
+  rooms: HomeRoom[];
+  /**
+   * FriendsLive are other rooms where friends are live now and the user
+   * may watch (friends only see each other live where they are allowed).
+   */
+  friendsLive: HomeRoom[];
+}
+/**
  * StartStreamRequest is the body of POST /api/streams (app and web senders).
  */
 export interface StartStreamRequest {

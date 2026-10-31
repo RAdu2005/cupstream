@@ -779,6 +779,15 @@ func (g *Gateway) Stream(streamID string) (LiveStream, bool) {
 	return g.snapshotLocked(streamID, s, g.viewerCountsLocked()), true
 }
 
+// UserStream returns the active stream of userID, if they are live.
+func (g *Gateway) UserStream(userID string) (LiveStream, bool) {
+	rec := g.activeStreamOf(userID)
+	if rec == nil {
+		return LiveStream{}, false
+	}
+	return g.Stream(rec.ID)
+}
+
 func (g *Gateway) activeStreamOf(userID string) *store.Stream {
 	g.mu.Lock()
 	defer g.mu.Unlock()

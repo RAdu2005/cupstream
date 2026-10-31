@@ -81,6 +81,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/account/stream-key", requireUser(s.regenerateStreamKey))
 
 	// Rooms and streams.
+	mux.Handle("GET /api/home", requireUser(s.home))
 	mux.HandleFunc("GET /api/rooms/{slug}", s.getRoom)
 	mux.Handle("PATCH /api/rooms/{slug}", requireUser(s.updateRoom))
 	mux.Handle("GET /api/rooms/{slug}/allowed", requireUser(s.listAllowed))
