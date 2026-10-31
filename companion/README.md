@@ -39,8 +39,17 @@ cupstream-cli --server http://localhost:5173 watch --room <slug>  # decode what 
 ```sh
 cd app && npm ci
 CUPSTREAM_SERVER=http://localhost:5173 npm run tauri dev   # against `make dev`
-npm run tauri build -- --bundles deb,rpm                   # nsis on Windows
+npm run tauri build -- --bundles deb,rpm                   # nsis on Windows, after the bundle below
 ```
+
+On Windows, the installer ships its own trimmed GStreamer runtime; build it before `tauri build`, from a GStreamer MSVC installation and the CLI (whose imports are the app's):
+
+```powershell
+cargo build --bin cupstream-cli
+scripts\gstreamer-bundle.ps1 -GstRoot C:\gstreamer -Exe target\debug\cupstream-cli.exe -Out app\src-tauri\gstreamer
+```
+
+The script copies the plugins in `scripts/gstreamer-plugins.txt` and, following their imports with `dumpbin`, exactly the DLLs they and the app need. `tauri.windows.conf.json` installs the DLLs next to `cupstream-app.exe` and the plugins in `gstreamer-1.0\`. At startup, `cupstream_media::use_bundled_gstreamer()` points GStreamer at that directory only, with its own registry in `%LOCALAPPDATA%\CupStream`, so a GStreamer installed system-wide is ignored (a full one also hangs while scanning its plugins). Windows looks for DLLs in the program's directory first, so a GStreamer on `PATH` cannot be loaded instead. `cupstream-cli check` lists the elements the app uses and fails if one is missing; copied into the installation directory, it tests the bundle. A new element needs its plugin added to the list.
 
 Linux also needs the WebKitGTK 4.1, AppIndicator and librsvg development files (Arch: `webkit2gtk-4.1 libayatana-appindicator librsvg`). `CUPSTREAM_SERVER` only sets the server on the first run; afterwards it is in the app's settings.
 
