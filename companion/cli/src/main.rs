@@ -53,6 +53,10 @@ enum Command {
         /// Seconds to watch.
         #[arg(long, default_value_t = 10)]
         seconds: u64,
+        /// Also record what arrives into this directory: the audio as raw
+        /// PCM and a frame per second, for quality checks.
+        #[arg(long)]
+        record: Option<PathBuf>,
     },
 }
 
@@ -147,7 +151,11 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Publish(args) => publish(&cli.server, args).await,
-        Command::Watch { room, seconds } => {
+        Command::Watch {
+            room,
+            seconds,
+            record,
+        } => {
             cupstream_media::init()?;
             let client = Client::new(&cli.server, load("tokens.json").get(&cli.server).cloned())?;
             let Some(id) = client.room_streams(&room).await?.into_iter().next() else {
@@ -156,15 +164,24 @@ async fn main() -> anyhow::Result<()> {
             let url = client.whep_url(&id).to_string();
             let token = client.token().map(str::to_owned);
             let report = tokio::task::spawn_blocking(move || {
-                cupstream_media::watch::watch(&url, token.as_deref(), Duration::from_secs(seconds))
+                if let Some(dir) = &record {
+                    std::fs::create_dir_all(dir)?;
+                }
+                cupstream_media::watch::watch(
+                    &url,
+                    token.as_deref(),
+                    Duration::from_secs(seconds),
+                    record.as_deref(),
+                )
             })
             .await??;
             println!(
-                "stream {id}: {} video frames ({}x{}), first after {:?}; {} audio buffers",
+                "stream {id}: {} video frames ({}x{}), first after {:?}, longest gap {:?}; {} audio buffers",
                 report.video_frames,
                 report.width,
                 report.height,
                 report.first_frame.unwrap_or_default(),
+                report.longest_gap,
                 report.audio_buffers
             );
             Ok(())
