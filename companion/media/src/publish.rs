@@ -137,7 +137,12 @@ impl Publisher {
     }
 
     pub fn start(&self) -> anyhow::Result<()> {
-        if self.pipeline.set_state(gst::State::Playing).is_err() {
+        // Off the async runtime, like stop: a sink that fails to start
+        // cleans up inside this call.
+        let pipeline = &self.pipeline;
+        let started =
+            std::thread::scope(|s| s.spawn(|| pipeline.set_state(gst::State::Playing)).join());
+        if !matches!(started, Ok(Ok(_))) {
             // The element that refused posted why.
             let why = self
                 .bus()
