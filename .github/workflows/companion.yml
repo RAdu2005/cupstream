@@ -1,0 +1,106 @@
+name: Companion
+
+# The desktop app's Rust workspace (companion/). Kept apart from ci.yml so
+# its builds never slow down or block the server, web and smoke checks.
+on:
+  push:
+    branches: [master]
+    paths: ['companion/**', '.github/workflows/companion.yml']
+  pull_request:
+    paths: ['companion/**', '.github/workflows/companion.yml']
+
+defaults:
+  run:
+    working-directory: companion
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: GStreamer and PipeWire development files
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-nice \
+            libpipewire-0.3-dev libclang-dev pkg-config
+      - uses: jdx/mise-action@v5
+        with:
+          working_directory: companion
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: companion
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+      - run: cargo build --bin cupstream-cli
+      - name: Encoders on this runner
+        run: target/debug/cupstream-cli encoders
+
+      # Pipeline smoke test: a test source published through /whip into
+      # the real server and MediaMTX, and a WHEP viewer that must decode it.
+      - name: Start the stack
+        working-directory: .
+        run: |
+          cat > .env <<'EOF'
+          CUPSTREAM_PUBLIC_URL=http://localhost:8080
+          CUPSTREAM_DEV_LOGIN=true
+          EOF
+          docker compose up -d --build
+          for i in $(seq 60); do
+            curl -sf http://localhost:8080/healthz | grep -q '"reachable":true' && break
+            sleep 1
+          done
+      - name: Publish and watch
+        run: |
+          set -euo pipefail
+          s=http://localhost:8080
+          curl -sf -c cookies.txt -H 'Content-Type: application/json' -d '{"handle":"ci"}' $s/api/auth/dev/login >/dev/null
+          slug=$(curl -sf -b cookies.txt $s/api/account | jq -r .roomSlug)
+          curl -sf -b cookies.txt -X PATCH -H 'Content-Type: application/json' -d '{"visibility":"everyone"}' $s/api/rooms/$slug >/dev/null
+          key=$(curl -sf -b cookies.txt -X POST $s/api/account/stream-key | jq -r .key)
+          target/debug/cupstream-cli --server $s publish --stream-key "$key" \
+            --source test --audio test --encoder x264enc --fps 30 --duration 40 &
+          sleep 8
+          target/debug/cupstream-cli --server $s watch --room "$slug" --seconds 10
+          wait
+      - name: Logs
+        if: always()
+        working-directory: .
+        run: docker compose logs
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: GStreamer
+        shell: pwsh
+        run: |
+          $version = '1.28.8'
+          $url = "https://gstreamer.freedesktop.org/data/pkg/windows/$version/msvc/gstreamer-1.0-msvc-x86_64-$version.exe"
+          Invoke-WebRequest $url -OutFile gstreamer.exe
+          Start-Process gstreamer.exe -Wait -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/TYPE=full', '/DIR=C:\gstreamer'
+          $pc = Get-ChildItem C:\gstreamer -Recurse -Filter gstreamer-1.0.pc | Select-Object -First 1
+          if (-not $pc) { throw 'gstreamer-1.0.pc not found: the installer did not include the development files' }
+          $root = $pc.Directory.Parent.Parent.FullName
+          "PKG_CONFIG_PATH=$($pc.DirectoryName)" | Out-File -Append $env:GITHUB_ENV
+          "$root\bin" | Out-File -Append $env:GITHUB_PATH
+      - uses: jdx/mise-action@v5
+        with:
+          working_directory: companion
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: companion
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+      - run: cargo build --bin cupstream-cli
+      - name: Encoders on this runner
+        run: target/debug/cupstream-cli encoders
+      # For testing on a Windows machine without a Rust toolchain: it needs
+      # the GStreamer runtime installed, with its bin directory on PATH.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cupstream-cli-windows
+          path: companion/target/debug/cupstream-cli.exe
