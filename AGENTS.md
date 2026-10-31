@@ -19,7 +19,7 @@ Rules for coding agents (and a summary for people). The README has the layout, t
 - What is live: `curl -s https://cupstream.larp.love/healthz | jq .version`. How the deploy went: `gh run list --branch master --workflow CI`, then `gh run view <id> --log-failed`.
 - Roll back by opening a revert pull request (`git revert <commit>`). In an emergency, and only when the maintainer asks, re-run the `deploy` job in the CI run of an earlier commit (`gh run rerun <run-id> --job <job-id>`).
 - Only the binary is deployed automatically. Changes on the server itself (the systemd unit, `/etc/cupstream/env`, MediaMTX, the firewall, the tunnel) are made by hand: list them in the pull request. Connect to the server only when the maintainer asks you to, and prefer reading (status, logs) to changing.
-- Migrations run when the server starts and are not undone by a rollback. Write them so the previous release still works on the migrated database: add tables and columns; drop or rename them only in a later change, once nothing uses them.
+- Migrations run when the server starts and are not undone by a rollback. Write them so the previous release still works on the migrated database: add tables and columns; drop or rename them only in a later change, once nothing uses them. Create them with `make migration name=...`. They can be applied in a different order in development and in production (whichever pull request merges first), so a migration must not depend on another branch's unmerged one.
 
 ## Public repository
 
