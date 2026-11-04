@@ -190,14 +190,15 @@ impl LowCtl {
         let s = &self.settings;
         let video = gst::parse::bin_from_description(
             &format!(
-                "queue leaky=downstream max-size-buffers=1 max-size-time=0 max-size-bytes=0 \
-                 ! videorate drop-only=true max-rate={} ! {}",
-                s.fps,
+                "queue leaky=downstream max-size-buffers=1 max-size-time=0 max-size-bytes=0 ! {}",
                 cand.upload_description(Some(s.height))
             ),
             true,
         )?;
         video.set_property("name", "low-video");
+        if let Some(pad) = video.static_pad("sink") {
+            crate::capture::limit_frame_rate(&pad, s.fps);
+        }
         let enc = cand.make(&encoder::Settings {
             bitrate_kbps: s.bitrate_kbps,
             fps: s.fps,
@@ -259,8 +260,8 @@ impl LowCtl {
                 link_to_sink(q, "audio_%u")?;
             }
             keep_caps_stable(&parse);
-            if let Some(size) = video.by_name("size") {
-                lock_size(&enc, size);
+            if let (Some(size), Some(input)) = (video.by_name("size"), video.static_pad("sink")) {
+                lock_size(&input, size, Some(s.height));
             }
             for e in &elements {
                 e.sync_state_with_parent()?;

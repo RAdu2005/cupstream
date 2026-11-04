@@ -122,8 +122,8 @@ impl Publisher {
         ])?;
         log_keyframe_requests(&enc);
         keep_caps_stable(&parse);
-        if let Some(size) = upload.by_name("size") {
-            lock_size(&enc, size);
+        if let (Some(size), Some(input)) = (upload.by_name("size"), upload.static_pad("sink")) {
+            lock_size(&input, size, video.height);
         }
 
         if let Some(audio) = &audio {
@@ -213,8 +213,10 @@ impl Publisher {
         if self.low.as_ref().is_some_and(|l| l.handle_error(msg)) {
             return None;
         }
+        // Name the element: the GStreamer message alone rarely says which.
         Some(format!(
-            "{} ({})",
+            "{}: {} ({})",
+            msg.src().map(|s| s.name().to_string()).unwrap_or_default(),
             e.error(),
             e.debug().map(|d| d.to_string()).unwrap_or_default()
         ))
@@ -327,32 +329,56 @@ pub(crate) fn keep_caps_stable(parse: &gst::Element) {
     });
 }
 
-/// Fixes the encoded size to the first frame's: when a captured window is
-/// resized, later frames are scaled (with borders) to the same size rather
-/// than changing the stream's caps.
-pub(crate) fn lock_size(enc: &gst::Element, size: gst::Element) {
-    let Some(pad) = enc.static_pad("sink") else {
-        return;
+/// The size to encode a `width`x`height` source at: scaled to `height`
+/// when given and smaller (never up), keeping the aspect ratio, and
+/// rounded down to even numbers. 4:2:0 H.264 needs even dimensions, and
+/// screens are not always even: 2560x1600 at a 1.5 scale is 1707x1067,
+/// which x264 refuses and VA-API cannot fixate.
+pub(crate) fn output_size(width: u32, height: u32, target_height: Option<u32>) -> (u32, u32) {
+    let (w, h) = match target_height {
+        Some(t) if t < height => {
+            let w = (u64::from(width) * u64::from(t) + u64::from(height) / 2) / u64::from(height);
+            (w as u32, t)
+        }
+        _ => (width, height),
     };
+    ((w & !1).max(2), (h & !1).max(2))
+}
+
+/// Fixes the encoded size from the first frame's: the capsfilter `size`
+/// after the converter gets the size [`output_size`] computes, before the
+/// converter negotiates. Later, when a captured window is resized, its
+/// frames are scaled (with borders) to the same size rather than changing
+/// the stream's caps, which whipclientsink cannot renegotiate. `input` is
+/// the converter's sink.
+pub(crate) fn lock_size(input: &gst::Pad, size: gst::Element, target_height: Option<u32>) {
     let size = size.downgrade();
-    pad.add_probe(gst::PadProbeType::EVENT_DOWNSTREAM, move |_, info| {
+    input.add_probe(gst::PadProbeType::EVENT_DOWNSTREAM, move |_, info| {
         let Some(gst::PadProbeData::Event(ev)) = &info.data else {
             return gst::PadProbeReturn::Ok;
         };
         let gst::EventView::Caps(c) = ev.view() else {
             return gst::PadProbeReturn::Ok;
         };
-        let (Some(size), Some(s)) = (size.upgrade(), c.caps().structure(0)) else {
+        let Some(size) = size.upgrade() else {
             return gst::PadProbeReturn::Remove;
         };
-        if let (Ok(w), Ok(h)) = (s.get::<i32>("width"), s.get::<i32>("height")) {
-            let mut caps = size.property::<gst::Caps>("caps");
-            if let Some(st) = caps.make_mut().structure_mut(0) {
-                st.set("width", w);
-                st.set("height", h);
-            }
-            size.set_property("caps", caps);
+        let dims = c
+            .caps()
+            .structure(0)
+            .and_then(|s| Some((s.get::<i32>("width").ok()?, s.get::<i32>("height").ok()?)));
+        // A frame without a usable size cannot fix it; wait for the next.
+        let Some((w, h)) = dims.filter(|(w, h)| *w > 0 && *h > 0) else {
+            return gst::PadProbeReturn::Ok;
+        };
+        let (w, h) = output_size(w as u32, h as u32, target_height);
+        let mut caps = size.property::<gst::Caps>("caps");
+        if let Some(st) = caps.make_mut().structure_mut(0) {
+            st.set("width", w as i32);
+            st.set("height", h as i32);
         }
+        tracing::debug!("encoding {w}x{h}");
+        size.set_property("caps", caps);
         gst::PadProbeReturn::Remove
     });
 }
@@ -371,4 +397,126 @@ fn log_keyframe_requests(enc: &gst::Element) {
         }
         gst::PadProbeReturn::Ok
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn output_sizes_are_even_and_never_upscaled() {
+        // 2560x1600 at a 1.5 scale.
+        assert_eq!(output_size(1707, 1067, None), (1706, 1066));
+        assert_eq!(output_size(1707, 1067, Some(720)), (1152, 720));
+        assert_eq!(output_size(1707, 1067, Some(1080)), (1706, 1066));
+        assert_eq!(output_size(1707, 1067, Some(1067)), (1706, 1066));
+        assert_eq!(output_size(2560, 1600, Some(1080)), (1728, 1080));
+        assert_eq!(output_size(1920, 1080, Some(1080)), (1920, 1080));
+        // An odd target height (cupstream-cli --height).
+        assert_eq!(output_size(1920, 1080, Some(719)), (1278, 718));
+        assert_eq!(output_size(1, 1, None), (2, 2));
+    }
+
+    /// An odd-sized (1707x1067) source through the capture tail, the
+    /// converter and the encoder, as the publisher links them: the encoded
+    /// size, or the error.
+    fn encode(cand: &'static Candidate, height: Option<u32>) -> anyhow::Result<(i32, i32)> {
+        crate::init()?;
+        let pipeline = gst::Pipeline::new();
+        let src = gst::parse::bin_from_description(
+            &format!(
+                "appsrc name=src is-live=true format=time \
+                 caps=video/x-raw,format=BGRx,width=1707,height=1067,framerate=30/1 ! {}",
+                crate::capture::capture_tail()
+            ),
+            true,
+        )?;
+        let upload = gst::parse::bin_from_description(&cand.upload_description(height), true)?;
+        let enc = cand.make(&encoder::Settings {
+            bitrate_kbps: 2000,
+            fps: 30,
+            keyframe_secs: 1,
+        })?;
+        let caps = gst::ElementFactory::make("capsfilter")
+            .property("caps", cand.output_caps())
+            .build()?;
+        let parse = gst::ElementFactory::make("h264parse").build()?;
+        let sink = gst::ElementFactory::make("appsink").build()?;
+        pipeline.add_many([
+            src.upcast_ref(),
+            upload.upcast_ref(),
+            &enc,
+            &caps,
+            &parse,
+            &sink,
+        ])?;
+        gst::Element::link_many([
+            src.upcast_ref(),
+            upload.upcast_ref(),
+            &enc,
+            &caps,
+            &parse,
+            &sink,
+        ])?;
+        lock_size(
+            &upload.static_pad("sink").unwrap(),
+            upload.by_name("size").unwrap(),
+            height,
+        );
+
+        let appsrc = src
+            .by_name("src")
+            .unwrap()
+            .downcast::<gst_app::AppSrc>()
+            .unwrap();
+        let appsink = sink.downcast::<gst_app::AppSink>().unwrap();
+        pipeline.set_state(gst::State::Playing)?;
+        for i in 0..10u64 {
+            let mut buf = gst::Buffer::with_size(1707 * 1067 * 4)?;
+            buf.get_mut()
+                .unwrap()
+                .set_pts(gst::ClockTime::from_mseconds(i * 33));
+            let _ = appsrc.push_buffer(buf);
+        }
+        let sample = appsink.try_pull_sample(gst::ClockTime::from_seconds(10));
+        let error = pipeline
+            .bus()
+            .unwrap()
+            .pop_filtered(&[gst::MessageType::Error]);
+        let _ = pipeline.set_state(gst::State::Null);
+        if let Some(msg) = error
+            && let gst::MessageView::Error(e) = msg.view()
+        {
+            anyhow::bail!("{}", e.error());
+        }
+        let caps = sample
+            .ok_or_else(|| anyhow::anyhow!("no frame"))?
+            .caps()
+            .unwrap()
+            .to_owned();
+        let st = caps.structure(0).unwrap();
+        Ok((st.get("width")?, st.get("height")?))
+    }
+
+    #[test]
+    fn odd_source_sizes_encode() {
+        crate::init().unwrap();
+        let mut tried = 0;
+        for name in ["x264enc", "openh264enc", "vah264enc", "nvh264enc"] {
+            let Some(cand) = Candidate::by_factory(name).filter(|c| c.probe().is_ok()) else {
+                continue;
+            };
+            tried += 1;
+            for (height, want) in [
+                (None, (1706, 1066)),
+                (Some(720), (1152, 720)),
+                (Some(1080), (1706, 1066)),
+            ] {
+                let got =
+                    encode(cand, height).unwrap_or_else(|e| panic!("{name} at {height:?}: {e:#}"));
+                assert_eq!(got, want, "{name} at {height:?}");
+            }
+        }
+        assert!(tried > 0, "no H.264 encoder to test with");
+    }
 }

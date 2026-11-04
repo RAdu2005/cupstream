@@ -85,8 +85,8 @@ struct PublishArgs {
     /// End your stream elsewhere first.
     #[arg(long)]
     replace: bool,
-    /// What to capture: portal, x11, x11:<xid>, monitor:<index>,
-    /// window:<hwnd> or test. Default: portal on Wayland, x11 on X11,
+    /// What to capture: portal, x11, x11:<xid>, pipewire:<node>,
+    /// monitor:<index>, monitor-handle:<n>, window:<hwnd> or test. Default: portal on Wayland, x11 on X11,
     /// monitor:0 on Windows.
     #[arg(long)]
     source: Option<String>,
@@ -396,6 +396,13 @@ fn parse_source(s: Option<&str>, restore_token: Option<String>) -> anyhow::Resul
         "test" => VideoSource::Test,
         #[cfg(target_os = "linux")]
         "portal" => VideoSource::Portal { restore_token },
+        #[cfg(target_os = "linux")]
+        "pipewire" => VideoSource::PipeWire {
+            target: arg
+                .filter(|a| !a.is_empty())
+                .ok_or_else(|| anyhow!("pipewire needs a node name"))?
+                .to_owned(),
+        },
         #[cfg(target_os = "linux")]
         "x11" => VideoSource::X11 {
             window: arg.map(|a| num(Some(a))).transpose()?,

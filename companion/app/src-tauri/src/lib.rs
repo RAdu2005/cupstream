@@ -616,7 +616,11 @@ async fn watch(core: Arc<Core>, generation: u64) {
             let mut error = None;
             while let Some(msg) = bus.pop() {
                 // Errors of the low-quality version are handled inside.
-                if let Some(e) = live.publisher.check(&msg) {
+                // The first error is the cause; later ones (an encoder that
+                // got no usable caps) follow from it.
+                if let Some(e) = live.publisher.check(&msg)
+                    && error.is_none()
+                {
                     error = Some(e);
                 }
             }

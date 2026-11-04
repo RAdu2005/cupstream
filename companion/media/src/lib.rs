@@ -68,7 +68,6 @@ pub const REQUIRED_ELEMENTS: &[&str] = &[
     "capsfilter",
     "tee",
     "videoconvertscale",
-    "videorate",
     "h264parse",
     "audioconvert",
     "audioresample",
