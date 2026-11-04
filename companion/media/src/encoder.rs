@@ -232,12 +232,14 @@ impl Candidate {
     /// low-quality version branch off, for encoders on the GPU: it moves
     /// each DMA-BUF frame into the GPU's own memory and hands the buffer
     /// back to the compositor at once, so neither branch holds the
-    /// compositor's few buffers while frames wait or get scaled.
+    /// compositor's few buffers while frames wait or get scaled. It keeps
+    /// the source's size (see `publish::copy_bin`): the capsfilter "size"
+    /// gets it.
     pub fn copy_description(&self) -> Option<&'static str> {
         match self.upload {
-            Upload::Va => {
-                Some("vapostproc ! capsfilter caps=\"video/x-raw(memory:VAMemory),format=NV12\"")
-            }
+            Upload::Va => Some(
+                "vapostproc ! capsfilter name=size caps=\"video/x-raw(memory:VAMemory),format=NV12\"",
+            ),
             _ => None,
         }
     }

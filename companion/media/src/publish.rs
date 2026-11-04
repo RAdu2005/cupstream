@@ -112,10 +112,7 @@ impl Publisher {
             .name("video-tee")
             .property("allow-not-linked", true)
             .build()?;
-        let copy = encoder_info
-            .copy_description()
-            .map(|d| gst::parse::bin_from_description(d, true))
-            .transpose()?;
+        let copy = encoder_info.copy_description().map(copy_bin).transpose()?;
         let frames = if cfg!(windows) {
             None
         } else {
@@ -531,6 +528,26 @@ pub(crate) fn fit_size(
     true
 }
 
+/// The copy after the capture (see `Candidate::copy_description`), held to
+/// the size of what comes in. Left to negotiate, vapostproc scales to what
+/// the converter after it prefers, the encoded size at the start, and the
+/// converter then only passes frames on: the encoded size could not change
+/// while live, and a larger size would be scaled up from the smaller one.
+fn copy_bin(desc: &str) -> anyhow::Result<gst::Bin> {
+    let bin = gst::parse::bin_from_description(desc, true)?;
+    if let (Some(size), Some(input)) = (bin.by_name("size"), bin.static_pad("sink")) {
+        input.add_probe(gst::PadProbeType::EVENT_DOWNSTREAM, move |_, info| {
+            if let Some(gst::PadProbeData::Event(ev)) = &info.data
+                && let gst::EventView::Caps(c) = ev.view()
+            {
+                fit_size(&size, c.caps(), None);
+            }
+            gst::PadProbeReturn::Ok
+        });
+    }
+    Ok(bin)
+}
+
 /// Fixes the encoded size from the first frame's: the capsfilter `size`
 /// after the converter gets the size [`output_size`] computes, before the
 /// converter negotiates. Later, when a captured window is resized, its
@@ -691,6 +708,106 @@ mod tests {
                     encode(cand, height).unwrap_or_else(|e| panic!("{name} at {height:?}: {e:#}"));
                 assert_eq!(got, want, "{name} at {height:?}");
             }
+        }
+        assert!(tried > 0, "no H.264 encoder to test with");
+    }
+
+    /// A 2560x1600 source through the copy (when the encoder has one), a
+    /// tee, the converter and the encoder, as the publisher links them,
+    /// encoded at 720 and then, while running, at 1440 (`set_video`): the
+    /// encoded sizes in order.
+    fn resize(cand: &'static Candidate) -> anyhow::Result<Vec<(i32, i32)>> {
+        let pipeline = gst::Pipeline::new();
+        let src = gst_app::AppSrc::builder()
+            .is_live(true)
+            .format(gst::Format::Time)
+            .caps(
+                &"video/x-raw,format=NV12,width=2560,height=1600,framerate=30/1,pixel-aspect-ratio=1/1"
+                    .parse::<gst::Caps>()?,
+            )
+            .build();
+        let copy = cand.copy_description().map(copy_bin).transpose()?;
+        let tee = gst::ElementFactory::make("tee")
+            .property("allow-not-linked", true)
+            .build()?;
+        let queue = gst::ElementFactory::make("queue").build()?;
+        let upload = gst::parse::bin_from_description(&cand.upload_description(Some(720)), true)?;
+        let enc = cand.make(&encoder::Settings {
+            bitrate_kbps: 4000,
+            fps: 30,
+            keyframe_secs: 1,
+        })?;
+        let caps = gst::ElementFactory::make("capsfilter")
+            .property("caps", cand.output_caps())
+            .build()?;
+        let parse = gst::ElementFactory::make("h264parse").build()?;
+        let sink = gst_app::AppSink::builder().sync(false).build();
+        let chain = [
+            tee.clone(),
+            queue,
+            upload.clone().upcast(),
+            enc,
+            caps,
+            parse,
+            sink.clone().upcast(),
+        ];
+        pipeline.add(&src)?;
+        pipeline.add_many(&chain)?;
+        match &copy {
+            Some(c) => {
+                pipeline.add(c)?;
+                gst::Element::link_many([src.upcast_ref(), c.upcast_ref(), &tee])?;
+            }
+            None => src.link(&tee)?,
+        }
+        gst::Element::link_many(&chain)?;
+        let size = upload.by_name("size").unwrap();
+        lock_size(&upload.static_pad("sink").unwrap(), size.clone(), Some(720));
+
+        pipeline.set_state(gst::State::Playing)?;
+        let mut sizes = Vec::new();
+        for i in 0..60u64 {
+            if i == 30 {
+                let input = upload.static_pad("sink").unwrap().current_caps().unwrap();
+                fit_size(&size, &input, Some(1440));
+            }
+            let mut buf = gst::Buffer::with_size(2560 * 1600 * 3 / 2)?;
+            buf.get_mut()
+                .unwrap()
+                .set_pts(gst::ClockTime::from_mseconds(i * 33));
+            let _ = src.push_buffer(buf);
+            if let Some(sample) = sink.try_pull_sample(gst::ClockTime::from_mseconds(500)) {
+                let st = sample.caps().unwrap().structure(0).unwrap().to_owned();
+                let size = (st.get::<i32>("width")?, st.get::<i32>("height")?);
+                if sizes.last() != Some(&size) {
+                    sizes.push(size);
+                }
+            }
+        }
+        let error = pipeline
+            .bus()
+            .unwrap()
+            .pop_filtered(&[gst::MessageType::Error]);
+        let _ = pipeline.set_state(gst::State::Null);
+        if let Some(msg) = error
+            && let gst::MessageView::Error(e) = msg.view()
+        {
+            anyhow::bail!("{}", e.error());
+        }
+        Ok(sizes)
+    }
+
+    #[test]
+    fn size_changes_while_encoding() {
+        crate::init().unwrap();
+        let mut tried = 0;
+        for name in ["x264enc", "openh264enc", "vah264enc", "nvh264enc"] {
+            let Some(cand) = Candidate::by_factory(name).filter(|c| c.probe().is_ok()) else {
+                continue;
+            };
+            tried += 1;
+            let sizes = resize(cand).unwrap_or_else(|e| panic!("{name}: {e:#}"));
+            assert_eq!(sizes, [(1152, 720), (2304, 1440)], "{name}");
         }
         assert!(tried > 0, "no H.264 encoder to test with");
     }
