@@ -128,7 +128,11 @@ pub async fn open(source: &VideoSource, fps: u32, copy: bool) -> anyhow::Result<
 
 async fn open_source(source: &VideoSource, fps: u32, copy: bool) -> anyhow::Result<Capture> {
     let rate = capture_tail();
+    // A pipewiresrc option: Linux only.
+    #[cfg(target_os = "linux")]
     let copy = if copy { " always-copy=true" } else { "" };
+    #[cfg(not(target_os = "linux"))]
+    let _ = copy;
     match source {
         VideoSource::Test => Ok(Capture {
             bin: bin_from(&format!(
