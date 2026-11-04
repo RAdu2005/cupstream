@@ -119,6 +119,19 @@ struct PublishArgs {
     /// Do not publish a low-quality version, even when the server takes one.
     #[arg(long)]
     no_low: bool,
+    /// Change what is shared, the height or the frame rate this many
+    /// seconds in, without ending the stream (with --change-source,
+    /// --change-height, --change-fps).
+    #[arg(long)]
+    change_after: Option<u64>,
+    /// The source to change to, as for --source; portal asks again.
+    #[arg(long, requires = "change_after")]
+    change_source: Option<String>,
+    /// The height to change to; 0 for the source's size.
+    #[arg(long, requires = "change_after")]
+    change_height: Option<u32>,
+    #[arg(long, requires = "change_after")]
+    change_fps: Option<u32>,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -260,10 +273,14 @@ async fn run(bundled: bool) -> anyhow::Result<()> {
             })
             .await??;
             println!(
-                "stream {id}: {} video frames ({}x{}), first after {:?}, longest gap {:?}; {} audio buffers",
+                "stream {id}: {} video frames ({}), first after {:?}, longest gap {:?}; {} audio buffers",
                 report.video_frames,
-                report.width,
-                report.height,
+                report
+                    .sizes
+                    .iter()
+                    .map(|(w, h)| format!("{w}x{h}"))
+                    .collect::<Vec<_>>()
+                    .join(", then "),
                 report.first_frame.unwrap_or_default(),
                 report.longest_gap,
                 report.audio_buffers
@@ -379,7 +396,10 @@ fn parse_source(s: Option<&str>, restore_token: Option<String>) -> anyhow::Resul
     let Some(s) = s else {
         return Ok(match capture::default_source() {
             #[cfg(target_os = "linux")]
-            VideoSource::Portal { .. } => VideoSource::Portal { restore_token },
+            VideoSource::Portal { .. } => VideoSource::Portal {
+                restore_token,
+                remember: true,
+            },
             other => other,
         });
     };
@@ -395,7 +415,10 @@ fn parse_source(s: Option<&str>, restore_token: Option<String>) -> anyhow::Resul
     Ok(match kind {
         "test" => VideoSource::Test,
         #[cfg(target_os = "linux")]
-        "portal" => VideoSource::Portal { restore_token },
+        "portal" => VideoSource::Portal {
+            restore_token,
+            remember: true,
+        },
         #[cfg(target_os = "linux")]
         "pipewire" => VideoSource::PipeWire {
             target: arg
@@ -470,7 +493,7 @@ async fn publish(server: &str, args: PublishArgs) -> anyhow::Result<()> {
             )?,
     };
 
-    let publisher = Publisher::new(
+    let mut publisher = Publisher::new(
         cap,
         audio,
         enc,
@@ -500,7 +523,22 @@ async fn publish(server: &str, args: PublishArgs) -> anyhow::Result<()> {
         None => eprintln!("publishing to {}", dest.whip_url),
     }
 
-    let result = run_until_stopped(&publisher, args.duration.map(Duration::from_secs)).await;
+    let deadline = args.duration.map(Duration::from_secs);
+    let result = match args.change_after {
+        Some(after) => {
+            let after = Duration::from_secs(after);
+            match run_until_stopped(&publisher, Some(after)).await {
+                Ok(true) => {
+                    change(&mut publisher, &args, enc).await?;
+                    run_until_stopped(&publisher, deadline.map(|d| d.saturating_sub(after)))
+                        .await
+                        .map(|_| ())
+                }
+                other => other.map(|_| ()),
+            }
+        }
+        None => run_until_stopped(&publisher, deadline).await.map(|_| ()),
+    };
     // Stopping sends the WHIP DELETE, which ends the stream; ending it
     // through the API as well covers a pipeline that died without one.
     publisher.stop();
@@ -514,9 +552,36 @@ async fn publish(server: &str, args: PublishArgs) -> anyhow::Result<()> {
     result
 }
 
+/// Applies the --change-* options while live.
+async fn change(
+    publisher: &mut Publisher,
+    args: &PublishArgs,
+    enc: &'static encoder::Candidate,
+) -> anyhow::Result<()> {
+    let height = args
+        .change_height
+        .map_or(args.height, |h| Some(h).filter(|&h| h > 0));
+    let fps = args.change_fps.unwrap_or(args.fps);
+    if args.change_height.is_some() || args.change_fps.is_some() {
+        eprintln!(
+            "changing to {} at {fps} fps",
+            height.map_or("the source's size".into(), |h| format!("{h}p"))
+        );
+        publisher.set_video(height, fps);
+    }
+    if let Some(src) = &args.change_source {
+        // The portal asks again: a new choice, not the remembered one.
+        let source = parse_source(Some(src), None)?;
+        let cap = capture::open(&source, fps, enc.copies_from_capture()).await?;
+        eprintln!("sharing {src} now");
+        publisher.switch_capture(cap)?;
+    }
+    Ok(())
+}
+
 /// Follows the pipeline until Ctrl+C, the duration, or an error; prints
-/// changes in captured audio.
-async fn run_until_stopped(p: &Publisher, duration: Option<Duration>) -> anyhow::Result<()> {
+/// changes in captured audio. True when the duration ran out.
+async fn run_until_stopped(p: &Publisher, duration: Option<Duration>) -> anyhow::Result<bool> {
     let bus = p.bus();
     let deadline = duration.map(|d| tokio::time::Instant::now() + d);
     let mut tick = tokio::time::interval(Duration::from_millis(100));
@@ -526,11 +591,11 @@ async fn run_until_stopped(p: &Publisher, duration: Option<Duration>) -> anyhow:
     tokio::pin!(ctrl_c);
     loop {
         tokio::select! {
-            _ = &mut ctrl_c => return Ok(()),
+            _ = &mut ctrl_c => return Ok(false),
             _ = tick.tick() => {}
         }
         if deadline.is_some_and(|d| tokio::time::Instant::now() >= d) {
-            return Ok(());
+            return Ok(true);
         }
         while let Some(msg) = bus.pop() {
             match msg.view() {
@@ -541,7 +606,7 @@ async fn run_until_stopped(p: &Publisher, duration: Option<Duration>) -> anyhow:
                     }
                 }
                 gst::MessageView::Warning(w) => eprintln!("warning: {}", w.error()),
-                gst::MessageView::Eos(_) => return Ok(()),
+                gst::MessageView::Eos(_) => return Ok(false),
                 _ => {}
             }
         }

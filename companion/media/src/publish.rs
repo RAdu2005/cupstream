@@ -42,7 +42,14 @@ pub struct Publisher {
     pipeline: gst::Pipeline,
     encoder: gst::Element,
     pub encoder_info: &'static Candidate,
-    _capture: Capture,
+    capture: Capture,
+    /// The converter in front of the encoder; its capsfilter "size" sets
+    /// the encoded size.
+    upload: gst::Bin,
+    video_tee: gst::Element,
+    /// What the stream is encoded at now (see `set_video`).
+    height: Option<u32>,
+    fps: u32,
     audio: Option<AudioCapture>,
     low: Option<LowCtl>,
     /// The capture's own pipeline and the frame clock (not on Windows yet:
@@ -199,7 +206,11 @@ impl Publisher {
             pipeline,
             encoder: enc,
             encoder_info,
-            _capture: capture,
+            capture,
+            upload,
+            video_tee,
+            height: video.height,
+            fps: video.fps,
             audio,
             low,
             frames,
@@ -283,6 +294,93 @@ impl Publisher {
         encoder::set_bitrate(&self.encoder, kbps);
     }
 
+    /// Shares another source while live, in the same session: viewers see
+    /// the new source without reconnecting. The encoded size is fitted to
+    /// the new source's first frame (and the stream's height), like the
+    /// first source's.
+    pub fn switch_capture(&mut self, capture: Capture) -> anyhow::Result<()> {
+        capture.set_fps(self.fps);
+        let refit = {
+            let size = self.upload.by_name("size");
+            let height = self.height;
+            let low = self.low.clone();
+            move |caps: &gst::CapsRef| {
+                if let Some(size) = &size {
+                    fit_size(size, caps, height);
+                }
+                if let Some(low) = &low {
+                    low.refit(caps);
+                }
+            }
+        };
+        match &self.frames {
+            Some(frames) => frames.switch(&capture.bin, move |caps| refit(caps))?,
+            None => self.replace_capture_bin(&capture.bin, refit)?,
+        }
+        // The old capture stopped; its portal session can end.
+        self.capture = capture;
+        Ok(())
+    }
+
+    /// Without the frame clock (Windows): the new capture bin takes the old
+    /// one's place in the pipeline. The old one stops first, since a
+    /// running source whose pad gets unlinked fails the stream; the encoder
+    /// gets no frames for that moment. Should the new one not link, the old
+    /// one is put back. A new one that fails to start posts its error, and
+    /// the stream reconnects with the old source.
+    fn replace_capture_bin(
+        &self,
+        bin: &gst::Bin,
+        refit: impl Fn(&gst::CapsRef) + Send + Sync + 'static,
+    ) -> anyhow::Result<()> {
+        let old = self.capture.bin.clone();
+        self.pipeline.add(bin)?;
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                let _ = old.set_state(gst::State::Null);
+            });
+        });
+        old.unlink(&self.video_tee);
+        if let Err(e) = bin.link(&self.video_tee) {
+            let _ = self.pipeline.remove(bin);
+            let _ = old.link(&self.video_tee);
+            let _ = old.sync_state_with_parent();
+            return Err(e).context("linking the new capture");
+        }
+        let _ = self.pipeline.remove(&old);
+        if let Some(pad) = bin.static_pad("src") {
+            pad.add_probe(gst::PadProbeType::BUFFER, move |pad, _| {
+                if let Some(caps) = pad.current_caps() {
+                    refit(&caps);
+                }
+                gst::PadProbeReturn::Remove
+            });
+        }
+        bin.sync_state_with_parent()
+            .context("starting the new capture")?;
+        Ok(())
+    }
+
+    /// Changes the resolution (the height to scale to; None keeps the
+    /// source's size) and the frame rate while live. The low-quality
+    /// version keeps its own.
+    pub fn set_video(&mut self, height: Option<u32>, fps: u32) {
+        self.height = height;
+        self.fps = fps;
+        self.capture.set_fps(fps);
+        if let Some(frames) = &self.frames {
+            frames.set_fps(fps);
+        }
+        if let (Some(size), Some(caps)) = (
+            self.upload.by_name("size"),
+            self.upload
+                .static_pad("sink")
+                .and_then(|p| p.current_caps()),
+        ) {
+            fit_size(&size, &caps, height);
+        }
+    }
+
     pub fn audio(&self) -> Option<&AudioCapture> {
         self.audio.as_ref()
     }
@@ -352,10 +450,12 @@ pub(crate) fn keyframes_until_connected(sink: &gst::Element, encoder: &gst::Elem
     });
 }
 
-/// whipclientsink cannot renegotiate, so the encoded caps must never
-/// change. Some parsers (h264parse in GStreamer 1.24) first pass the
-/// encoder's caps on and add these fields once they parsed the SPS; they
-/// are dropped so both caps are the same.
+/// whipclientsink cannot renegotiate: of the encoded caps, only the size
+/// and frame rate may change while live. Some parsers (h264parse in
+/// GStreamer 1.24) first pass the encoder's caps on and add these fields
+/// once they parsed the SPS; they are dropped so both caps are the same.
+/// A larger size or frame rate also raises the H.264 level, which
+/// whipclientsink refuses, so the caps keep the first level.
 pub(crate) fn keep_caps_stable(parse: &gst::Element) {
     const ADDED_LATER: [&str; 4] = [
         "coded-picture-structure",
@@ -366,13 +466,20 @@ pub(crate) fn keep_caps_stable(parse: &gst::Element) {
     let Some(pad) = parse.static_pad("src") else {
         return;
     };
-    pad.add_probe(gst::PadProbeType::EVENT_DOWNSTREAM, |_, info| {
+    let level = std::sync::Mutex::new(None::<String>);
+    pad.add_probe(gst::PadProbeType::EVENT_DOWNSTREAM, move |_, info| {
         if let Some(gst::PadProbeData::Event(ev)) = &mut info.data
             && let gst::EventView::Caps(c) = ev.view()
         {
             let mut caps = c.caps().to_owned();
+            let mut level = level.lock().unwrap();
             for s in caps.make_mut().iter_mut() {
                 s.remove_fields(ADDED_LATER);
+                match (&*level, s.get::<String>("level")) {
+                    (Some(first), Ok(_)) => s.set("level", first.as_str()),
+                    (None, Ok(l)) => *level = Some(l),
+                    _ => {}
+                }
             }
             *ev = gst::event::Caps::new(&caps);
         }
@@ -396,12 +503,40 @@ pub(crate) fn output_size(width: u32, height: u32, target_height: Option<u32>) -
     ((w & !1).max(2), (h & !1).max(2))
 }
 
+/// Sets the capsfilter `size` after the converter to the size
+/// [`output_size`] computes for a source with these caps. False when the
+/// caps have no usable size.
+pub(crate) fn fit_size(
+    size: &gst::Element,
+    source: &gst::CapsRef,
+    target_height: Option<u32>,
+) -> bool {
+    let dims = source
+        .structure(0)
+        .and_then(|s| Some((s.get::<i32>("width").ok()?, s.get::<i32>("height").ok()?)));
+    let Some((w, h)) = dims.filter(|(w, h)| *w > 0 && *h > 0) else {
+        return false;
+    };
+    let (w, h) = output_size(w as u32, h as u32, target_height);
+    let mut caps = size.property::<gst::Caps>("caps");
+    if let Some(st) = caps.make_mut().structure_mut(0) {
+        if st.get::<i32>("width") == Ok(w as i32) && st.get::<i32>("height") == Ok(h as i32) {
+            return true;
+        }
+        st.set("width", w as i32);
+        st.set("height", h as i32);
+    }
+    tracing::debug!("encoding {w}x{h}");
+    size.set_property("caps", caps);
+    true
+}
+
 /// Fixes the encoded size from the first frame's: the capsfilter `size`
 /// after the converter gets the size [`output_size`] computes, before the
 /// converter negotiates. Later, when a captured window is resized, its
 /// frames are scaled (with borders) to the same size rather than changing
-/// the stream's caps, which whipclientsink cannot renegotiate. `input` is
-/// the converter's sink.
+/// the encoder's size with every step of the resize. `input` is the
+/// converter's sink.
 pub(crate) fn lock_size(input: &gst::Pad, size: gst::Element, target_height: Option<u32>) {
     let size = size.downgrade();
     input.add_probe(gst::PadProbeType::EVENT_DOWNSTREAM, move |_, info| {
@@ -414,23 +549,12 @@ pub(crate) fn lock_size(input: &gst::Pad, size: gst::Element, target_height: Opt
         let Some(size) = size.upgrade() else {
             return gst::PadProbeReturn::Remove;
         };
-        let dims = c
-            .caps()
-            .structure(0)
-            .and_then(|s| Some((s.get::<i32>("width").ok()?, s.get::<i32>("height").ok()?)));
         // A frame without a usable size cannot fix it; wait for the next.
-        let Some((w, h)) = dims.filter(|(w, h)| *w > 0 && *h > 0) else {
-            return gst::PadProbeReturn::Ok;
-        };
-        let (w, h) = output_size(w as u32, h as u32, target_height);
-        let mut caps = size.property::<gst::Caps>("caps");
-        if let Some(st) = caps.make_mut().structure_mut(0) {
-            st.set("width", w as i32);
-            st.set("height", h as i32);
+        if fit_size(&size, c.caps(), target_height) {
+            gst::PadProbeReturn::Remove
+        } else {
+            gst::PadProbeReturn::Ok
         }
-        tracing::debug!("encoding {w}x{h}");
-        size.set_property("caps", caps);
-        gst::PadProbeReturn::Remove
     });
 }
 

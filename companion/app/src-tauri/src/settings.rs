@@ -90,8 +90,6 @@ pub struct Settings {
     /// Also send a low-quality version for viewers on slow connections,
     /// when the server takes one.
     pub low_quality: bool,
-    /// The screen-sharing portal's token for the last choice (Linux).
-    pub restore_token: Option<String>,
     /// What to capture on X11 and Windows: "monitor:<n>", "window:<id>".
     pub source: Option<String>,
 }
@@ -110,7 +108,6 @@ impl Default for Settings {
             audio_app: String::new(),
             hotkey: "Ctrl+Shift+F9".into(),
             low_quality: true,
-            restore_token: None,
             source: None,
         }
     }

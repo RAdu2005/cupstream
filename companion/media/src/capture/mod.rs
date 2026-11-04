@@ -5,6 +5,8 @@
 
 use anyhow::Context;
 use gst::prelude::*;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 /// What to capture.
 #[derive(Clone, Debug)]
@@ -16,6 +18,10 @@ pub enum VideoSource {
     Portal {
         /// From an earlier capture, to skip the dialog.
         restore_token: Option<String>,
+        /// Whether the choice's restore token stays valid after this
+        /// process exits; otherwise only while it runs (the app asks at
+        /// every go-live and restores the choice only to reconnect).
+        remember: bool,
     },
     /// The whole X11 screen, or one window by its XID.
     #[cfg(target_os = "linux")]
@@ -41,8 +47,38 @@ pub struct Capture {
     pub bin: gst::Bin,
     /// A token to capture the same source again without the dialog.
     pub restore_token: Option<String>,
+    /// The frame rate the bin's output is limited to.
+    fps: Arc<AtomicU32>,
     _keep: Box<dyn std::any::Any + Send>,
 }
+
+impl Capture {
+    fn plain(bin: gst::Bin) -> Self {
+        Self {
+            bin,
+            restore_token: None,
+            fps: Arc::default(),
+            _keep: Box::new(()),
+        }
+    }
+
+    /// Changes the frame rate the capture is limited to, while it runs.
+    pub fn set_fps(&self, fps: u32) {
+        self.fps.store(fps, Ordering::Relaxed);
+    }
+}
+
+/// The user closed the system's dialog without choosing anything to share.
+#[derive(Debug)]
+pub struct Cancelled;
+
+impl std::fmt::Display for Cancelled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("nothing was chosen to share")
+    }
+}
+
+impl std::error::Error for Cancelled {}
 
 /// The X11 or Wayland session, from the environment.
 #[cfg(target_os = "linux")]
@@ -57,6 +93,7 @@ pub fn default_source() -> VideoSource {
     return if is_wayland() {
         VideoSource::Portal {
             restore_token: None,
+            remember: true,
         }
     } else {
         VideoSource::X11 { window: None }
@@ -86,16 +123,17 @@ pub(crate) fn capture_tail() -> &'static str {
 /// allows, by their timestamps. Screen sources deliver frames when
 /// something changes, sometimes faster than the stream's frame rate. This
 /// replaces videorate, which aborts the process in GStreamer 1.24 on the
-/// variable frame rate (0/1) screen captures report.
-pub(crate) fn limit_frame_rate(pad: &gst::Pad, fps: u32) {
-    // A quarter of a frame of slack, so a source at exactly the frame rate
-    // keeps every frame despite jitter.
-    let min_gap = 1_000_000_000 / u64::from(fps.max(1)) * 3 / 4;
+/// variable frame rate (0/1) screen captures report. `fps` can change
+/// while frames flow.
+pub(crate) fn limit_frame_rate(pad: &gst::Pad, fps: Arc<AtomicU32>) {
     let last = std::sync::Mutex::new(None::<u64>);
     pad.add_probe(gst::PadProbeType::BUFFER, move |_, info| {
         let Some(pts) = info.buffer().and_then(|b| b.pts()).map(|t| t.nseconds()) else {
             return gst::PadProbeReturn::Ok;
         };
+        // A quarter of a frame of slack, so a source at exactly the frame
+        // rate keeps every frame despite jitter.
+        let min_gap = 1_000_000_000 / u64::from(fps.load(Ordering::Relaxed).max(1)) * 3 / 4;
         let mut last = last.lock().unwrap();
         if let Some(l) = *last
             && pts >= l
@@ -120,8 +158,9 @@ pub(crate) fn limit_frame_rate(pad: &gst::Pad, fps: u32) {
 /// after the capture (see `Candidate::capture_copy_description`).
 pub async fn open(source: &VideoSource, fps: u32, copy: bool) -> anyhow::Result<Capture> {
     let capture = open_source(source, fps, copy).await?;
+    capture.set_fps(fps);
     if let Some(pad) = capture.bin.static_pad("src") {
-        limit_frame_rate(&pad, fps);
+        limit_frame_rate(&pad, capture.fps.clone());
     }
     Ok(capture)
 }
@@ -134,60 +173,37 @@ async fn open_source(source: &VideoSource, fps: u32, copy: bool) -> anyhow::Resu
     #[cfg(not(target_os = "linux"))]
     let _ = copy;
     match source {
-        VideoSource::Test => Ok(Capture {
-            bin: bin_from(&format!(
-                "videotestsrc is-live=true pattern=ball ! capsfilter caps=video/x-raw,width=1920,height=1080,framerate={fps}/1"
-            ))?,
-            restore_token: None,
-            _keep: Box::new(()),
-        }),
+        VideoSource::Test => Ok(Capture::plain(bin_from(&format!(
+            "videotestsrc is-live=true pattern=ball ! capsfilter caps=video/x-raw,width=1920,height=1080,framerate={fps}/1"
+        ))?)),
         #[cfg(target_os = "linux")]
-        VideoSource::Portal { restore_token } => {
-            portal::open(restore_token.as_deref(), rate, copy).await
-        }
+        VideoSource::Portal {
+            restore_token,
+            remember,
+        } => portal::open(restore_token.as_deref(), *remember, rate, copy).await,
         #[cfg(target_os = "linux")]
-        VideoSource::PipeWire { target } => Ok(Capture {
-            bin: bin_from(&format!(
-                "pipewiresrc target-object={target} do-timestamp=true keepalive-time=500{copy} ! {rate}"
-            ))?,
-            restore_token: None,
-            _keep: Box::new(()),
-        }),
+        VideoSource::PipeWire { target } => Ok(Capture::plain(bin_from(&format!(
+            "pipewiresrc target-object={target} do-timestamp=true keepalive-time=500{copy} ! {rate}"
+        ))?)),
         #[cfg(target_os = "linux")]
         VideoSource::X11 { window } => {
             let xid = window.map(|w| format!(" xid={w}")).unwrap_or_default();
-            Ok(Capture {
-                bin: bin_from(&format!(
-                    "ximagesrc use-damage=false show-pointer=true{xid} ! {rate}"
-                ))?,
-                restore_token: None,
-                _keep: Box::new(()),
-            })
+            Ok(Capture::plain(bin_from(&format!(
+                "ximagesrc use-damage=false show-pointer=true{xid} ! {rate}"
+            ))?))
         }
         #[cfg(windows)]
-        VideoSource::Monitor(i) => Ok(Capture {
-            bin: bin_from(&format!(
-                "d3d11screencapturesrc capture-api=wgc show-cursor=true monitor-index={i} ! {rate}"
-            ))?,
-            restore_token: None,
-            _keep: Box::new(()),
-        }),
+        VideoSource::Monitor(i) => Ok(Capture::plain(bin_from(&format!(
+            "d3d11screencapturesrc capture-api=wgc show-cursor=true monitor-index={i} ! {rate}"
+        ))?)),
         #[cfg(windows)]
-        VideoSource::MonitorHandle(h) => Ok(Capture {
-            bin: bin_from(&format!(
-                "d3d11screencapturesrc capture-api=wgc show-cursor=true monitor-handle={h} ! {rate}"
-            ))?,
-            restore_token: None,
-            _keep: Box::new(()),
-        }),
+        VideoSource::MonitorHandle(h) => Ok(Capture::plain(bin_from(&format!(
+            "d3d11screencapturesrc capture-api=wgc show-cursor=true monitor-handle={h} ! {rate}"
+        ))?)),
         #[cfg(windows)]
-        VideoSource::Window(hwnd) => Ok(Capture {
-            bin: bin_from(&format!(
-                "d3d11screencapturesrc capture-api=wgc show-cursor=true window-handle={hwnd} ! {rate}"
-            ))?,
-            restore_token: None,
-            _keep: Box::new(()),
-        }),
+        VideoSource::Window(hwnd) => Ok(Capture::plain(bin_from(&format!(
+            "d3d11screencapturesrc capture-api=wgc show-cursor=true window-handle={hwnd} ! {rate}"
+        ))?)),
     }
 }
 
@@ -196,9 +212,10 @@ pub mod windows;
 
 #[cfg(target_os = "linux")]
 mod portal {
-    use super::{Capture, bin_from};
+    use super::{Arc, Cancelled, Capture, bin_from};
     use anyhow::{Context, bail};
     use ashpd::desktop::PersistMode;
+    use ashpd::desktop::ResponseError;
     use ashpd::desktop::screencast::{CursorMode, Screencast, SelectSourcesOptions, SourceType};
     use std::os::fd::{AsRawFd, OwnedFd};
 
@@ -210,6 +227,7 @@ mod portal {
 
     pub async fn open(
         restore_token: Option<&str>,
+        remember: bool,
         rate: &str,
         copy: &str,
     ) -> anyhow::Result<Capture> {
@@ -225,16 +243,22 @@ mod portal {
                     .set_sources(SourceType::Monitor | SourceType::Window)
                     .set_multiple(false)
                     .set_restore_token(restore_token)
-                    .set_persist_mode(PersistMode::ExplicitlyRevoked),
+                    .set_persist_mode(if remember {
+                        PersistMode::ExplicitlyRevoked
+                    } else {
+                        PersistMode::Application
+                    }),
             )
             .await?
             .response()
+            .map_err(cancelled)
             .context("choosing what to share")?;
         let streams = proxy
             .start(&session, None, Default::default())
             .await?
             .response()
-            .context("sharing was cancelled")?;
+            .map_err(cancelled)
+            .context("starting to share")?;
         let Some(stream) = streams.streams().first() else {
             bail!("nothing was chosen to share");
         };
@@ -253,11 +277,20 @@ mod portal {
         Ok(Capture {
             bin,
             restore_token,
+            fps: Arc::default(),
             _keep: Box::new(Session {
                 _fd: fd,
                 _session: session,
             }),
         })
+    }
+
+    /// A dialog the user closed becomes `Cancelled`.
+    fn cancelled(e: ashpd::Error) -> anyhow::Error {
+        match e {
+            ashpd::Error::Response(ResponseError::Cancelled) => Cancelled.into(),
+            e => e.into(),
+        }
     }
 }
 
@@ -394,7 +427,10 @@ mod tests {
             .unwrap()
             .downcast::<gst_app::AppSrc>()
             .unwrap();
-        limit_frame_rate(&src.static_pad("src").unwrap(), 60);
+        limit_frame_rate(
+            &src.static_pad("src").unwrap(),
+            Arc::new(AtomicU32::new(60)),
+        );
         let kept = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
         let k = kept.clone();
         pipeline

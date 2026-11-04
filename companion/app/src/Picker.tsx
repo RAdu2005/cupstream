@@ -4,10 +4,19 @@ import { Button } from '@web/components/ui';
 import { commands, errorMessage, type Shareable } from './api';
 
 /**
- * Choosing what to share, before going live (Windows): screens first, then
- * windows, each with a thumbnail of what viewers will see.
+ * Choosing what to share, before going live or while live (Windows): screens
+ * first, then windows, each with a thumbnail of what viewers will see.
  */
-export function Picker({ onPick, onCancel }: { onPick: (id: string) => void; onCancel: () => void }) {
+export function Picker({
+  action,
+  onPick,
+  onCancel,
+}: {
+  /** The confirming button's label. */
+  action: string;
+  onPick: (id: string) => void;
+  onCancel: () => void;
+}) {
   const [sources, setSources] = useState<Shareable[] | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -48,7 +57,7 @@ export function Picker({ onPick, onCancel }: { onPick: (id: string) => void; onC
       </div>
       <div className="flex gap-2">
         <Button className="flex-1" disabled={!selected} onClick={() => selected && onPick(selected)}>
-          Go live
+          {action}
         </Button>
         <Button variant="secondary" onClick={onCancel}>
           Cancel

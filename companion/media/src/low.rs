@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::encoder::{self, Candidate, Codec};
-use crate::publish::{Endpoint, keep_caps_stable, keyframes_until_connected, lock_size};
+use crate::publish::{Endpoint, fit_size, keep_caps_stable, keyframes_until_connected, lock_size};
 
 /// Attempts after a failure before giving up on the low-quality version.
 const MAX_ATTEMPTS: u32 = 5;
@@ -134,6 +134,20 @@ impl LowCtl {
         self.inner.lock().unwrap().stopped = true;
     }
 
+    /// Fits the encoded size to a new source with these caps (see
+    /// `Publisher::switch_capture`).
+    pub(crate) fn refit(&self, caps: &gst::CapsRef) {
+        let size = self.inner.lock().unwrap().branch.as_ref().and_then(|b| {
+            b.elements
+                .first()?
+                .downcast_ref::<gst::Bin>()?
+                .by_name("size")
+        });
+        if let Some(size) = size {
+            fit_size(&size, caps, Some(self.settings.height));
+        }
+    }
+
     /// Adds the branch once the stream's own WebRTC connection is up.
     pub(crate) fn start_when_connected(&self, main_sink: &gst::Element) {
         let ctl = self.clone();
@@ -197,7 +211,7 @@ impl LowCtl {
         )?;
         video.set_property("name", "low-video");
         if let Some(pad) = video.static_pad("sink") {
-            crate::capture::limit_frame_rate(&pad, s.fps);
+            crate::capture::limit_frame_rate(&pad, Arc::new(s.fps.into()));
         }
         let enc = cand.make(&encoder::Settings {
             bitrate_kbps: s.bitrate_kbps,

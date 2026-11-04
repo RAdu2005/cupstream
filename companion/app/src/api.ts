@@ -22,6 +22,8 @@ export interface Status {
   hotkeyError: string | null;
   /** Going live first shows the app's picker (Windows). */
   picker: boolean;
+  /** What is shared can be chosen, and changed while live (not on X11). */
+  chooseSource: boolean;
 }
 
 export type Preset = '720p30' | '1080p30' | '1080p60' | '1440p60' | '2160p60' | 'source';
@@ -37,7 +39,6 @@ export interface Settings {
   audioApp: string;
   hotkey: string;
   lowQuality: boolean;
-  restoreToken: string | null;
   source: string | null;
 }
 
@@ -88,6 +89,8 @@ export const commands = {
   goLive: (room: string | null, linkFallback: boolean, replace: boolean, source: string | null) =>
     invoke<void>('go_live', { room, linkFallback, replace, source }),
   listSources: () => invoke<Shareable[]>('list_sources'),
+  /** Shares something else while live: the picker's choice, or (null) a new choice in the system's dialog. */
+  changeSource: (source: string | null) => invoke<void>('change_source', { source }),
   stop: () => invoke<void>('stop'),
   getSettings: () => invoke<Settings>('get_settings'),
   saveSettings: (settings: Settings) => invoke<void>('save_settings', { settings }),
