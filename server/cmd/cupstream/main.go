@@ -101,7 +101,8 @@ func run() error {
 		}
 	}
 	gw.LowEnabled = cfg.LowQuality
-	slog.Info("low-quality versions", "accepted", cfg.LowQuality)
+	gw.SetMaxTranscodes(cfg.Transcodes)
+	slog.Info("low-quality versions", "accepted", cfg.LowQuality, "max_transcodes", cfg.Transcodes)
 	hub := realtime.New(db, roomService, gw, cfg)
 	gw.OnRoomIdle = hub.RoomIdle
 	go func() {

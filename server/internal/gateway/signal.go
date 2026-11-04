@@ -153,9 +153,14 @@ func (g *Gateway) Play(w http.ResponseWriter, r *http.Request, userID string) {
 	if !g.allowWatch(w, r, ls.Stream, userID) {
 		return
 	}
-	if variant == VariantLow && ls.Low == LowNone {
-		writeErr(w, http.StatusConflict, CodeLowQualityUnavailable, "this stream has no low-quality version right now")
-		return
+	if variant == VariantLow {
+		switch ls.Low {
+		case LowNone:
+			writeErr(w, http.StatusConflict, CodeLowQualityUnavailable, "this stream has no low-quality version right now")
+			return
+		case LowTranscoded:
+			variant = VariantTranscode
+		}
 	}
 	g.forwardOffer(w, r, ls.Stream, variant, false, userID)
 }
@@ -247,6 +252,11 @@ func (g *Gateway) forwardOffer(w http.ResponseWriter, r *http.Request, rec store
 			writeServerFull(w)
 			return false
 		}
+		// Last: an admitted viewer takes a place among the transcodes.
+		if variant == VariantTranscode && !g.reserveTranscode(rec.ID) {
+			writeErr(w, http.StatusConflict, CodeLowQualityUnavailable, "the server is making as many low-quality versions as it can")
+			return false
+		}
 		if p {
 			if !g.Features().Pause {
 				writeErr(w, http.StatusNotImplemented, "pause_unsupported", errPauseUnsupported.Error())
@@ -289,6 +299,10 @@ func (g *Gateway) forwardOffer(w http.ResponseWriter, r *http.Request, rec store
 		return false
 	}
 	if resp.StatusCode != http.StatusCreated {
+		if variant == VariantTranscode {
+			// MediaMTX waits for FFmpeg to publish, and gives up after a while.
+			slog.WarnContext(r.Context(), "a transcode did not start; is FFmpeg installed, and runOnDemand set in mediamtx.yml?", "stream", rec.ID, "status", resp.StatusCode, "answer", strings.TrimSpace(string(answer)))
+		}
 		relayMediaError(w, resp.StatusCode, answer)
 		return false
 	}
@@ -436,7 +450,7 @@ func relayMediaError(w http.ResponseWriter, status int, body []byte) {
 func (g *Gateway) HandleSession(w http.ResponseWriter, r *http.Request) {
 	streamID, kind, secret := r.PathValue("stream"), r.PathValue("kind"), r.PathValue("secret")
 	variant, ok := sessionVariant(r)
-	if !ok || !reStreamID.MatchString(streamID) || (kind != "whip" && kind != "whep") || !reSecret.MatchString(secret) {
+	if !ok || !reStreamID.MatchString(streamID) || (kind != "whip" && kind != "whep") || (kind == "whip" && variant == VariantTranscode) || !reSecret.MatchString(secret) {
 		writeErr(w, http.StatusNotFound, "", "no such session")
 		return
 	}

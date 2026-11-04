@@ -32,8 +32,11 @@ func (g *Gateway) admit(streamID string, v Variant) bool {
 		return true // a stream that ended is reported as such by the caller
 	}
 	bitrate := ls.Stats.Bitrate
-	if v == VariantLow {
+	switch v {
+	case VariantLow:
 		bitrate = cmp.Or(ls.LowBitrate, LowDefaultBitrate)
+	case VariantTranscode:
+		bitrate = LowDefaultBitrate // FFmpeg's ceiling (mediamtx.yml)
 	}
 	if g.Admission.Admit(bitrate) {
 		return true

@@ -8,9 +8,23 @@ type AdminOverview struct {
 	Viewers int `json:"viewers"`
 	// What the server receives from streamers and sends to viewers, from
 	// MediaMTX's counters.
-	Incoming int64        `json:"incoming"`
-	Outgoing int64        `json:"outgoing"`
-	Banned   []BannedUser `json:"banned"`
+	Incoming   int64        `json:"incoming"`
+	Outgoing   int64        `json:"outgoing"`
+	Transcodes Transcodes   `json:"transcodes"`
+	Banned     []BannedUser `json:"banned"`
+}
+
+// Transcodes is how many low-quality versions the server transcodes, and
+// how many it may at once. Max starts at CUPSTREAM_TRANSCODES; an admin
+// can change it with PUT /api/admin/transcodes until the server restarts.
+type Transcodes struct {
+	Running int `json:"running"`
+	Max     int `json:"max"`
+}
+
+// SetTranscodesRequest is the body of PUT /api/admin/transcodes.
+type SetTranscodesRequest struct {
+	Max int `json:"max"`
 }
 
 // AdminStream is a live stream with the room it is in and what it costs.

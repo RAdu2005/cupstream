@@ -103,7 +103,23 @@ export interface AdminOverview {
    */
   incoming: number /* int64 */;
   outgoing: number /* int64 */;
+  transcodes: Transcodes;
   banned: BannedUser[];
+}
+/**
+ * Transcodes is how many low-quality versions the server transcodes, and
+ * how many it may at once. Max starts at CUPSTREAM_TRANSCODES; an admin
+ * can change it with PUT /api/admin/transcodes until the server restarts.
+ */
+export interface Transcodes {
+  running: number /* int */;
+  max: number /* int */;
+}
+/**
+ * SetTranscodesRequest is the body of PUT /api/admin/transcodes.
+ */
+export interface SetTranscodesRequest {
+  max: number /* int */;
 }
 /**
  * AdminStream is a live stream with the room it is in and what it costs.

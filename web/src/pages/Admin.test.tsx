@@ -22,6 +22,7 @@ const overview: AdminOverview = {
   viewers: 3,
   incoming: 8e6,
   outgoing: 24e6,
+  transcodes: { running: 1, max: 4 },
   banned: [{ user: { id: 'u3', handle: 'carol', displayName: 'Carol' }, bannedAt: 1_700_000_000 }],
 };
 
@@ -73,4 +74,18 @@ test('others are turned away and see no admin link', async () => {
   });
   expect(await screen.findByText('This page is for admins.')).toBeInTheDocument();
   expect(screen.queryByRole('link', { name: 'Admin' })).not.toBeInTheDocument();
+});
+
+test('an admin sees the transcodes and changes their limit', async () => {
+  const fetchMock = setup((url, init) => {
+    if (url === '/api/me') return json(200, { user: root, admin: true });
+    if (url === '/api/admin') return json(200, overview);
+    if (init?.method === 'PUT' && url === '/api/admin/transcodes') return json(200, { max: 0 });
+  });
+  expect(await screen.findByText('1 of 4')).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText('Transcode limit'), { target: { value: '0' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Set limit' }));
+  await waitFor(() =>
+    expect(fetchMock).toHaveBeenCalledWith('/api/admin/transcodes', expect.objectContaining({ method: 'PUT', body: '{"max":0}' })),
+  );
 });

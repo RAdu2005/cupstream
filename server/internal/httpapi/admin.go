@@ -21,6 +21,7 @@ import (
 func (s *Server) adminRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /api/admin", s.requireAdmin(s.adminOverview))
 	mux.Handle("POST /api/admin/streams/{id}/end", s.requireAdmin(s.adminEndStream))
+	mux.Handle("PUT /api/admin/transcodes", s.requireAdmin(s.adminSetTranscodes))
 	mux.Handle("PUT /api/admin/bans/{handle}", s.requireAdmin(s.platformBan))
 	mux.Handle("DELETE /api/admin/bans/{handle}", s.requireAdmin(s.platformUnban))
 }
@@ -61,7 +62,11 @@ func (s *Server) requireAdmin(h func(http.ResponseWriter, *http.Request, auth.Cu
 }
 
 func (s *Server) adminOverview(w http.ResponseWriter, r *http.Request, cur auth.Current) {
-	out := api.AdminOverview{Streams: []api.AdminStream{}, Banned: []api.BannedUser{}}
+	tc := s.Gateway.Transcodes()
+	out := api.AdminOverview{
+		Streams: []api.AdminStream{}, Banned: []api.BannedUser{},
+		Transcodes: api.Transcodes{Running: tc.Running, Max: tc.Max},
+	}
 	users := view.Users{DB: s.DB}
 	slugs := map[string]string{} // by room ID
 	for _, as := range s.Gateway.AllStreams() {
@@ -106,6 +111,23 @@ func (s *Server) adminEndStream(w http.ResponseWriter, r *http.Request, cur auth
 	s.Gateway.EndStream(r.Context(), ls.Stream.ID, gateway.EndAdmin)
 	slog.InfoContext(r.Context(), "admin ended a stream", "admin", cur.User.ID, "stream", ls.Stream.ID, "user", ls.Stream.UserID)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// adminSetTranscodes serves PUT /api/admin/transcodes: how many transcodes
+// may run at once, until the server restarts (CUPSTREAM_TRANSCODES then).
+// Lowering it stops none of the running ones.
+func (s *Server) adminSetTranscodes(w http.ResponseWriter, r *http.Request, cur auth.Current) {
+	var req api.SetTranscodesRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if req.Max < 0 || req.Max > 1000 {
+		writeError(w, http.StatusBadRequest, "max is a number of transcodes from 0 to 1000")
+		return
+	}
+	s.Gateway.SetMaxTranscodes(req.Max)
+	slog.InfoContext(r.Context(), "admin changed the transcode limit", "admin", cur.User.ID, "max", req.Max)
+	writeJSON(w, http.StatusOK, req)
 }
 
 // platformBanTarget loads the user named in the path, refusing admins:

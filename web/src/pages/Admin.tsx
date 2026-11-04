@@ -1,8 +1,8 @@
 import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
-import { useAdminEndStream, useAdminOverview, useBan, useUnban } from '@/api/admin';
+import { useAdminEndStream, useAdminOverview, useBan, useSetTranscodes, useUnban } from '@/api/admin';
 import { ApiError } from '@/api/client';
-import type { AdminStream, BannedUser } from '@/api/types.gen';
+import type { AdminStream, BannedUser, Transcodes as TranscodeUsage } from '@/api/types.gen';
 import { Button, Card, Input } from '@/components/ui';
 
 function mbps(bits: number) {
@@ -29,6 +29,7 @@ export function Admin() {
         <Stat label="Outgoing" value={mbps(o.outgoing)} />
       </div>
       <Streams streams={o.streams} />
+      <Transcodes usage={o.transcodes} />
       <Bans banned={o.banned} />
     </div>
   );
@@ -99,6 +100,48 @@ function Streams({ streams }: { streams: AdminStream[] }) {
         </div>
       )}
       {end.error && <p className="text-sm text-danger">{end.error.message}</p>}
+    </Card>
+  );
+}
+
+/** On-demand low-quality versions: how many run, and the limit, which an admin can change until a restart. */
+function Transcodes({ usage }: { usage: TranscodeUsage }) {
+  const [max, setMax] = useState('');
+  const set = useSetTranscodes();
+
+  function submit(e: FormEvent) {
+    e.preventDefault();
+    const n = Number(max);
+    if (max.trim() === '' || !Number.isInteger(n) || n < 0) return;
+    set.mutate(n, { onSuccess: () => setMax('') });
+  }
+
+  return (
+    <Card className="space-y-3">
+      <div className="space-y-1">
+        <h2 className="font-bold">Transcodes</h2>
+        <p className="text-sm text-muted">
+          Low-quality versions the server makes with FFmpeg for streams that do not send one:{' '}
+          <span className="font-semibold text-fg tabular-nums">
+            {usage.running} of {usage.max}
+          </span>{' '}
+          running. A new limit applies until the server restarts, then CUPSTREAM_TRANSCODES does again; lowering it
+          stops none of the running ones.
+        </p>
+      </div>
+      <form onSubmit={submit} className="flex gap-2">
+        <Input
+          aria-label="Transcode limit"
+          inputMode="numeric"
+          placeholder={String(usage.max)}
+          value={max}
+          onChange={(e) => setMax(e.target.value)}
+        />
+        <Button type="submit" disabled={set.isPending || max.trim() === ''}>
+          Set limit
+        </Button>
+      </form>
+      {set.error && <p className="text-sm text-danger">{set.error.message}</p>}
     </Card>
   );
 }

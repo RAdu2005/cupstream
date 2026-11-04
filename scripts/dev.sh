@@ -7,9 +7,10 @@
 # To run a second copy from another worktree, pick other ports:
 #   DEV_WEB_PORT=5174 DEV_SERVER_PORT=8081 make dev
 # Each copy gets its own MediaMTX container, with its ports moved by the same
-# offset as the server's (8081: API 9998, WHIP/WHEP 8890, media 8190), because
-# a server closes every media session it did not create. Google and Discord
-# sign-in only work on port 5173, where their redirect URIs are registered.
+# offset as the server's (8081: API 9998, WHIP/WHEP 8890, media 8190, RTSP
+# 8555), because a server closes every media session it did not create.
+# Google and Discord sign-in only work on port 5173, where their redirect
+# URIs are registered.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -24,6 +25,7 @@ project=cupstream
 [ "$offset" -eq 0 ] || project=cupstream-$server_port
 export MTX_APIADDRESS=127.0.0.1:$((9997 + offset))
 export MTX_WEBRTCADDRESS=127.0.0.1:$((8889 + offset))
+export MTX_RTSPADDRESS=127.0.0.1:$((8554 + offset))
 export MTX_WEBRTCLOCALUDPADDRESS=:$((8189 + offset))
 export MTX_WEBRTCLOCALTCPADDRESS=${MTX_WEBRTCLOCALTCPADDRESS-:$((8189 + offset))}
 docker compose -p "$project" up -d --build mediamtx
