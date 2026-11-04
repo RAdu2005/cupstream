@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { Button, Card, Input } from '@web/components/ui';
 import { commands, errorMessage, type Account, type Encoder, type Settings, type Status } from './api';
 
-const presets: [Settings['preset'], string][] = [
+export const presets: [Settings['preset'], string][] = [
   ['720p30', '720p, 30 fps'],
   ['1080p30', '1080p, 30 fps'],
   ['1080p60', '1080p, 60 fps'],
@@ -11,7 +11,7 @@ const presets: [Settings['preset'], string][] = [
   ['source', 'Source size, 60 fps'],
 ];
 
-const select = 'h-9 w-full rounded-md border border-line bg-bg pr-8 pl-2 text-sm focus:border-accent focus:outline-none';
+export const select = 'h-9 w-full rounded-md border border-line bg-bg pr-8 pl-2 text-sm focus:border-accent focus:outline-none';
 
 export function SettingsView({ status, onBack }: { status: Status; onBack: () => void }) {
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -52,7 +52,7 @@ export function SettingsView({ status, onBack }: { status: Status; onBack: () =>
         </Button>
       </header>
       {error && <p className="rounded-md bg-danger/10 p-3 text-sm text-danger">{error}</p>}
-      {live && <p className="text-xs text-muted">Changes to quality and audio apply the next time you go live.</p>}
+      {live && <p className="text-xs text-muted">Quality and bitrate change at once; codec, encoder and audio the next time you go live.</p>}
 
       <Card className="space-y-3 p-4">
         <Field label="Quality">
@@ -161,11 +161,6 @@ export function SettingsView({ status, onBack }: { status: Status; onBack: () =>
           <Input value={settings.hotkey} onChange={(e) => update({ hotkey: e.target.value })} placeholder="e.g. Ctrl+Shift+F9" />
         </Field>
         {status.hotkeyError && <p className="text-xs text-muted">{status.hotkeyError}</p>}
-        {settings.restoreToken && (
-          <Button variant="secondary" className="w-full" onClick={() => update({ restoreToken: null })}>
-            Choose what to share again next time
-          </Button>
-        )}
       </Card>
 
       <Card className="space-y-3 p-4">

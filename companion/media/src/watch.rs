@@ -17,8 +17,8 @@ pub struct WatchReport {
     pub audio_buffers: u64,
     /// From connecting to the first decoded video frame.
     pub first_frame: Option<Duration>,
-    pub width: i32,
-    pub height: i32,
+    /// The sizes of the decoded frames, in the order they changed.
+    pub sizes: Vec<(i32, i32)>,
     /// The longest time between two decoded video frames after the first.
     pub longest_gap: Duration,
 }
@@ -47,7 +47,7 @@ pub fn watch(
     let video = Arc::new(AtomicU64::new(0));
     let audio = Arc::new(AtomicU64::new(0));
     let first: Arc<Mutex<Option<Duration>>> = Arc::default();
-    let size: Arc<Mutex<(i32, i32)>> = Arc::default();
+    let size: Arc<Mutex<Vec<(i32, i32)>>> = Arc::default();
     let gaps: Arc<Mutex<(Option<Instant>, Duration)>> = Arc::default();
     let started = Instant::now();
 
@@ -109,11 +109,15 @@ pub fn watch(
                     g.0 = Some(now);
                     if v.fetch_add(1, Ordering::Relaxed) == 0 {
                         *f.lock().unwrap() = Some(started.elapsed());
-                        if let Some(info) = pad
-                            .current_caps()
-                            .and_then(|c| gst_video::VideoInfo::from_caps(&c).ok())
-                        {
-                            *sz.lock().unwrap() = (info.width() as i32, info.height() as i32);
+                    }
+                    if let Some(info) = pad
+                        .current_caps()
+                        .and_then(|c| gst_video::VideoInfo::from_caps(&c).ok())
+                    {
+                        let size = (info.width() as i32, info.height() as i32);
+                        let mut sizes = sz.lock().unwrap();
+                        if sizes.last() != Some(&size) {
+                            sizes.push(size);
                         }
                     }
                 } else {
@@ -145,13 +149,11 @@ pub fn watch(
     };
     let _ = pipeline.set_state(gst::State::Null);
     result?;
-    let (width, height) = *size.lock().unwrap();
     let report = WatchReport {
         video_frames: video.load(Ordering::Relaxed),
         audio_buffers: audio.load(Ordering::Relaxed),
         first_frame: *first.lock().unwrap(),
-        width,
-        height,
+        sizes: std::mem::take(&mut *size.lock().unwrap()),
         longest_gap: gaps.lock().unwrap().1,
     };
     if report.video_frames == 0 {

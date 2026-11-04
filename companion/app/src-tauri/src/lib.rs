@@ -39,6 +39,9 @@ pub struct Status {
     /// Going live first shows the app's own picker of screens and windows
     /// (Windows; on Linux the system's dialog asks).
     pub picker: bool,
+    /// What is shared can be chosen, and changed while live (the picker or
+    /// the system's dialog; not on X11, which shares the whole screen).
+    pub choose_source: bool,
     /// "idle", "signingIn", "starting", "live" or "reconnecting".
     pub phase: &'static str,
     pub room_url: Option<String>,
@@ -133,9 +136,25 @@ struct Live {
     publisher: publish::Publisher,
     dest: Destination,
     client: Client,
+    /// What is shared, to capture it again after the connection dropped.
+    source: VideoSource,
     /// The bitrate the user chose; the server's target only lowers it.
     bitrate: u32,
+    /// The server's last target for the stream, in bit/s (0: none).
+    target: u64,
     generation: u64,
+}
+
+impl Live {
+    /// The video bitrate to encode at: the user's, lowered to the server's
+    /// target minus audio.
+    fn video_kbps(&self) -> u32 {
+        if self.target == 0 {
+            return self.bitrate;
+        }
+        let target = (self.target / 1000).saturating_sub(AUDIO_KBPS as u64) as u32;
+        self.bitrate.min(target.max(MIN_VIDEO_KBPS))
+    }
 }
 
 /// What going live opens before it publishes.
@@ -143,6 +162,38 @@ struct Prepared {
     encoder: &'static Candidate,
     capture: capture::Capture,
     audio: Option<audio::AudioCapture>,
+}
+
+/// The source to open `capture`'s choice again without asking: the
+/// portal's restore token, valid while the app runs.
+fn reopen(source: VideoSource, capture: &capture::Capture) -> VideoSource {
+    #[cfg(target_os = "linux")]
+    if let VideoSource::Portal { remember, .. } = source {
+        return VideoSource::Portal {
+            restore_token: capture.restore_token.clone(),
+            remember,
+        };
+    }
+    let _ = capture;
+    source
+}
+
+/// Whether there is a choice of what to share (see `Status::choose_source`).
+fn can_choose_source() -> bool {
+    #[cfg(target_os = "linux")]
+    let portal = matches!(capture::default_source(), VideoSource::Portal { .. });
+    #[cfg(not(target_os = "linux"))]
+    let portal = false;
+    cfg!(windows) || portal
+}
+
+fn idle_status() -> Status {
+    Status {
+        phase: "idle",
+        picker: cfg!(windows),
+        choose_source: can_choose_source(),
+        ..Default::default()
+    }
 }
 
 fn publish(
@@ -290,10 +341,8 @@ impl Core {
         std::thread::spawn(move || keychain::delete(&server));
         self.update_status(|s| {
             *s = Status {
-                phase: "idle",
-                picker: cfg!(windows),
                 hotkey_error: s.hotkey_error.clone(),
-                ..Default::default()
+                ..idle_status()
             }
         });
     }
@@ -313,12 +362,16 @@ impl Core {
         Ok(c)
     }
 
+    /// What going live shares: the picker's choice (Windows), or a new
+    /// choice in the system's dialog. The dialog asks every time; its
+    /// choice is restored only to reconnect.
     fn video_source(&self, settings: &Settings) -> VideoSource {
         let default = capture::default_source();
         #[cfg(target_os = "linux")]
         if let VideoSource::Portal { .. } = default {
             return VideoSource::Portal {
-                restore_token: settings.restore_token.clone(),
+                restore_token: None,
+                remember: false,
             };
         }
         #[cfg(windows)]
@@ -343,7 +396,7 @@ impl Core {
         });
         let result = self.start(&client, &settings, opts).await;
         match result {
-            Ok((publisher, dest, warnings)) => {
+            Ok((publisher, dest, warnings, source)) => {
                 *generation += 1;
                 let room_url = dest
                     .room_slug
@@ -363,7 +416,9 @@ impl Core {
                     publisher,
                     dest,
                     client,
+                    source,
                     bitrate: settings.bitrate(),
+                    target: 0,
                     generation: *generation,
                 });
                 self.update_status(|s| {
@@ -379,6 +434,10 @@ impl Core {
             }
             Err(e) => {
                 self.update_status(|s| s.phase = "idle");
+                // Closing the system's dialog is no error.
+                if e.is::<capture::Cancelled>() {
+                    return Ok(());
+                }
                 Err(e)
             }
         }
@@ -389,13 +448,15 @@ impl Core {
         client: &Client,
         settings: &Settings,
         opts: StartOptions,
-    ) -> anyhow::Result<(publish::Publisher, Destination, Vec<String>)> {
-        let (prepared, warnings) = self.prepare(settings).await?;
+    ) -> anyhow::Result<(publish::Publisher, Destination, Vec<String>, VideoSource)> {
+        let source = self.video_source(settings);
+        let (prepared, warnings) = self.prepare(settings, &source).await?;
+        let source = reopen(source, &prepared.capture);
         // The stream is created last, so a cancelled screen choice does not
         // leave one behind.
         let dest = client.start_stream(&opts).await?;
         match publish(prepared, settings, &dest) {
-            Ok(p) => Ok((p, dest, warnings)),
+            Ok(p) => Ok((p, dest, warnings, source)),
             Err(e) => {
                 if let Some(id) = &dest.stream_id {
                     let _ = client.end_stream(id).await;
@@ -410,21 +471,13 @@ impl Core {
     async fn prepare(
         self: &Arc<Self>,
         settings: &Settings,
+        source: &VideoSource,
     ) -> anyhow::Result<(Prepared, Vec<String>)> {
         let s = settings.clone();
         let this = self.clone();
         let encoder = tokio::task::spawn_blocking(move || this.choose_encoder(&s)).await??;
-        let capture = capture::open(
-            &self.video_source(settings),
-            settings.preset.fps(),
-            encoder.copies_from_capture(),
-        )
-        .await?;
-        if capture.restore_token.is_some() && capture.restore_token != settings.restore_token {
-            let mut st = self.settings.lock().unwrap();
-            st.restore_token = capture.restore_token.clone();
-            let _ = st.save(&self.settings_path);
-        }
+        let capture =
+            capture::open(source, settings.preset.fps(), encoder.copies_from_capture()).await?;
         let mode = settings.audio_mode();
         let audio = tokio::task::spawn_blocking(move || audio::open(&mode)).await??;
         let warnings = audio
@@ -461,8 +514,12 @@ impl Core {
         for delay in [1, 2, 4, 8, 8] {
             tokio::time::sleep(Duration::from_secs(delay)).await;
             let settings = self.settings();
+            // What is shared now: it may have changed since the last try.
+            let source = self.live.lock().unwrap().as_ref().map(|l| l.source.clone());
+            let Some(source) = source else { return false };
             let attempt =
-                async { publish(self.prepare(&settings).await?.0, &settings, &dest) }.await;
+                async { publish(self.prepare(&settings, &source).await?.0, &settings, &dest) }
+                    .await;
             let mut guard = self.live.lock().unwrap();
             let Some(live) = guard.as_mut().filter(|l| l.generation == generation) else {
                 // Stopped meanwhile.
@@ -473,13 +530,7 @@ impl Core {
             };
             match attempt {
                 Ok(p) => {
-                    p.set_bitrate(
-                        self.status
-                            .lock()
-                            .unwrap()
-                            .bitrate_kbps
-                            .unwrap_or(live.bitrate),
-                    );
+                    p.set_bitrate(live.video_kbps());
                     live.publisher = p;
                     drop(guard);
                     self.update_status(|s| {
@@ -522,23 +573,88 @@ impl Core {
         });
     }
 
+    /// Shares something else while live, without ending the stream: the
+    /// picker's choice (`id`, Windows), or a new choice in the system's
+    /// dialog.
+    async fn change_source(self: &Arc<Self>, id: Option<String>) -> anyhow::Result<()> {
+        let (generation, copy) = {
+            let live = self.live.lock().unwrap();
+            let live = live.as_ref().ok_or_else(|| anyhow::anyhow!("not live"))?;
+            (
+                live.generation,
+                live.publisher.encoder_info.copies_from_capture(),
+            )
+        };
+        let settings = self.settings();
+        let source = match &id {
+            #[cfg(windows)]
+            Some(id) => {
+                capture::windows::parse(id).ok_or_else(|| anyhow::anyhow!("unknown source {id}"))?
+            }
+            _ => self.video_source(&settings),
+        };
+        let capture = match capture::open(&source, settings.preset.fps(), copy).await {
+            Ok(c) => c,
+            // The dialog was closed: keep sharing what is shared.
+            Err(e) if e.is::<capture::Cancelled>() => return Ok(()),
+            Err(e) => return Err(e),
+        };
+        let source = reopen(source, &capture);
+        {
+            let mut live = self.live.lock().unwrap();
+            // Stopped meanwhile: the capture closes here.
+            let Some(live) = live.as_mut().filter(|l| l.generation == generation) else {
+                return Ok(());
+            };
+            live.publisher.switch_capture(capture)?;
+            live.source = source;
+        }
+        // The picker's choice is also what the next stream starts with.
+        if let Some(id) = id {
+            let mut settings = self.settings.lock().unwrap();
+            settings.source = Some(id);
+            settings.save(&self.settings_path)?;
+        }
+        Ok(())
+    }
+
+    /// Applies the quality and bitrate settings to the live stream.
+    fn apply_quality(&self) {
+        let settings = self.settings();
+        let applied = {
+            let mut live = self.live.lock().unwrap();
+            let Some(live) = live.as_mut() else { return };
+            live.publisher
+                .set_video(settings.preset.height(), settings.preset.fps());
+            live.bitrate = settings.bitrate();
+            let kbps = live.video_kbps();
+            live.publisher.set_bitrate(kbps);
+            (kbps, kbps < live.bitrate)
+        };
+        tracing::info!(
+            "quality {:?}, video bitrate {} kbit/s",
+            settings.preset,
+            applied.0
+        );
+        self.update_status(|s| {
+            s.bitrate_kbps = Some(applied.0);
+            s.limited = applied.1;
+        });
+    }
+
     /// Applies the server's target: the stream's bitrate, minus audio, as
     /// a ceiling on the user's own choice.
     fn apply_target(&self, stream_id: &str, max_bitrate: u64) {
         let applied = {
-            let live = self.live.lock().unwrap();
+            let mut live = self.live.lock().unwrap();
             let Some(live) = live
-                .as_ref()
+                .as_mut()
                 .filter(|l| l.dest.stream_id.as_deref() == Some(stream_id))
             else {
                 return;
             };
-            let kbps = if max_bitrate == 0 {
-                live.bitrate
-            } else {
-                let target = (max_bitrate / 1000).saturating_sub(AUDIO_KBPS as u64) as u32;
-                live.bitrate.min(target.max(MIN_VIDEO_KBPS))
-            };
+            live.target = max_bitrate;
+            let kbps = live.video_kbps();
             live.publisher.set_bitrate(kbps);
             (kbps, kbps < live.bitrate)
         };
@@ -793,6 +909,13 @@ async fn list_sources() -> CmdResult<Vec<SourceView>> {
     Ok(Vec::new())
 }
 
+/// Shares something else while live: `source` is the picker's choice
+/// (Windows); without it the system's dialog asks.
+#[tauri::command]
+async fn change_source(core: State<'_, Arc<Core>>, source: Option<String>) -> CmdResult<()> {
+    Ok(core.inner().change_source(source).await?)
+}
+
 #[tauri::command]
 async fn stop(core: State<'_, Arc<Core>>) -> CmdResult<()> {
     core.stop(None).await;
@@ -806,10 +929,16 @@ fn get_settings(core: State<'_, Arc<Core>>) -> Settings {
 
 #[tauri::command]
 fn save_settings(core: State<'_, Arc<Core>>, settings: Settings) -> CmdResult<()> {
-    let server_changed = core.settings().server != settings.server;
+    let old = core.settings();
+    let server_changed = old.server != settings.server;
+    let quality_changed = old.preset != settings.preset || old.bitrate() != settings.bitrate();
     settings.save(&core.settings_path).map_err(CmdError::from)?;
     *core.settings.lock().unwrap() = settings;
     core.register_hotkey();
+    // Quality applies at once; the encoder and audio the next time.
+    if quality_changed {
+        core.apply_quality();
+    }
     if server_changed {
         *core.realtime.lock().unwrap() = None;
         *core.session.lock().unwrap() = None;
@@ -990,11 +1119,7 @@ pub fn run() {
                 settings_path,
                 session: Mutex::default(),
                 live: Mutex::default(),
-                status: Mutex::new(Status {
-                    phase: "idle",
-                    picker: cfg!(windows),
-                    ..Default::default()
-                }),
+                status: Mutex::new(idle_status()),
                 realtime: Mutex::default(),
                 events,
                 op: tokio::sync::Mutex::new(0),
@@ -1060,6 +1185,7 @@ pub fn run() {
             sign_out,
             go_live,
             list_sources,
+            change_source,
             stop,
             get_settings,
             save_settings,

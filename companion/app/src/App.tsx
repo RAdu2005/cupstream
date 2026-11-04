@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Card } from '@web/components/ui';
-import { commands, errorMessage, events, isCmdError, type Status } from './api';
+import { commands, errorMessage, events, isCmdError, type Settings, type Status } from './api';
 import { Picker } from './Picker';
-import { SettingsView } from './Settings';
+import { presets, select, SettingsView } from './Settings';
 
 /** A question before going live, from the server's refusal. */
 interface Prompt {
@@ -18,8 +18,11 @@ export function App() {
   const [view, setView] = useState<'main' | 'settings'>('main');
   const [prompt, setPrompt] = useState<Prompt | null>(null);
   const [error, setError] = useState<string | null>(null);
-  /** The picker is open for going live into this room (null: start mode). */
-  const [picking, setPicking] = useState<{ room: string | null } | null>(null);
+  /**
+   * The picker is open for going live into this room (null: start mode), or
+   * for changing what is shared while live.
+   */
+  const [picking, setPicking] = useState<{ room: string | null } | 'change' | null>(null);
   const pickerRef = useRef(false);
   pickerRef.current = status?.picker ?? false;
 
@@ -74,11 +77,13 @@ export function App() {
   if (picking && status.user) {
     return (
       <Picker
+        action={picking === 'change' ? 'Share' : 'Go live'}
         onCancel={() => setPicking(null)}
         onPick={(source) => {
-          const room = picking.room;
           setPicking(null);
-          void goLive(room, false, false, source);
+          setError(null);
+          if (picking === 'change') commands.changeSource(source).catch((e: unknown) => setError(errorMessage(e)));
+          else void goLive(picking.room, false, false, source);
         }}
       />
     );
@@ -102,6 +107,14 @@ export function App() {
           onGoLive={goLive}
           onRequestGoLive={requestGoLive}
           onCancel={() => setPrompt(null)}
+          onChangeSource={() => {
+            if (status.picker) {
+              setPicking('change');
+              return Promise.resolve();
+            }
+            setError(null);
+            return commands.changeSource(null).catch((e: unknown) => setError(errorMessage(e)));
+          }}
         />
       ) : (
         <SignIn status={status} />
@@ -139,6 +152,7 @@ function Main({
   onGoLive,
   onRequestGoLive,
   onCancel,
+  onChangeSource,
 }: {
   status: Status;
   prompt: Prompt | null;
@@ -146,10 +160,24 @@ function Main({
   onGoLive: (room: string | null, linkFallback?: boolean, replace?: boolean, source?: string | null) => Promise<void>;
   onRequestGoLive: (room: string | null) => void;
   onCancel: () => void;
+  /** Changes what is shared while live; resolves once it changed or was cancelled. */
+  onChangeSource: () => Promise<void>;
 }) {
   const live = status.phase === 'live' || status.phase === 'reconnecting';
   const starting = status.phase === 'starting';
   const [copied, setCopied] = useState(false);
+  const [changing, setChanging] = useState(false);
+  const [settings, setSettings] = useState<Settings | null>(null);
+  useEffect(() => {
+    if (live) void commands.getSettings().then(setSettings);
+  }, [live]);
+
+  function setPreset(preset: Settings['preset']) {
+    if (!settings) return;
+    const next = { ...settings, preset };
+    setSettings(next);
+    void commands.saveSettings(next);
+  }
 
   return (
     <div className="flex flex-1 flex-col gap-4">
@@ -191,6 +219,35 @@ function Main({
           <div className="flex items-center gap-2">
             <span className="rounded bg-live px-1.5 py-0.5 text-xs font-bold">LIVE</span>
             <span className="truncate text-sm text-muted">{status.roomUrl}</span>
+          </div>
+          <div className="flex gap-2">
+            {status.chooseSource && (
+              <Button
+                variant="secondary"
+                className="flex-1"
+                disabled={changing}
+                onClick={() => {
+                  setChanging(true);
+                  void onChangeSource().finally(() => setChanging(false));
+                }}
+              >
+                {changing ? 'Choosing…' : 'Change screen'}
+              </Button>
+            )}
+            {settings && (
+              <select
+                aria-label="Quality"
+                className={`${select} flex-1`}
+                value={settings.preset}
+                onChange={(e) => setPreset(e.target.value as Settings['preset'])}
+              >
+                {presets.map(([v, l]) => (
+                  <option key={v} value={v}>
+                    {l}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
           <div className="flex gap-2">
             <Button

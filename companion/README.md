@@ -32,7 +32,7 @@ cupstream-cli --server http://localhost:5173 publish --stream-key <key> --source
 cupstream-cli --server http://localhost:5173 watch --room <slug>  # decode what is live there
 ```
 
-`publish` options: `--source portal|x11|x11:<xid>|monitor:<n>|window:<hwnd>|test`, `--encoder <element>`, `--codec h264|av1`, `--bitrate <kbit/s>`, `--fps`, `--height`, `--audio except-discord|all|app:<name>|test|none`, `--room <slug>`, `--replace`, `--pick` (ask for the screen again instead of reusing the portal's last choice), `--duration <s>`. The app session token and the portal's restore token are kept in `~/.config/cupstream-cli/` (`%APPDATA%\cupstream-cli` on Windows); the app proper will keep its token in the system keychain.
+`publish` options: `--source portal|x11|x11:<xid>|monitor:<n>|window:<hwnd>|test`, `--encoder <element>`, `--codec h264|av1`, `--bitrate <kbit/s>`, `--fps`, `--height`, `--audio except-discord|all|app:<name>|test|none`, `--room <slug>`, `--replace`, `--pick` (ask for the screen again instead of reusing the portal's last choice), `--duration <s>`, and `--change-after <s>` with `--change-source`, `--change-height` (0 for the source's size) and `--change-fps` to change them while live, as the app's *Change screen* and quality picker do. `watch` lists every size it decoded. The app session token and the portal's restore token are kept in `~/.config/cupstream-cli/` (`%APPDATA%\cupstream-cli` on Windows); the app proper will keep its token in the system keychain.
 
 ## The app
 
