@@ -61,6 +61,8 @@ Linux also needs the WebKitGTK 4.1, AppIndicator and librsvg development files (
 
 ## How it works
 
+- **Low-quality version** (`media/src/low.rs`): a second encode of the same capture, from tees after the capture and after Opus, published as its own WHIP session; see [docs/desktop-app.md](../docs/desktop-app.md#low-quality-version).
+
 - **Encoding** happens before `whipclientsink`, which only packetizes and sends. Each platform has a list of encoders in order of preference (`media/src/encoder.rs`); the first whose element exists and that encodes a test frame is used. Settings: H.264 without B-frames (High, Main or Constrained Baseline), constant bitrate that can change while live, a 4-second keyframe interval. Viewers' keyframe requests (PLI) reach the encoder, so a joining viewer does not wait for it. AV1 is hardware only.
 - **Audio without Discord on Linux** works like venmic: a virtual PipeWire source (`cupstream-audio-<pid>`) that the app records from, and a PipeWire client that links every application's output into it except Discord's. A stream is only linked once its full properties are known; Discord is recognised by the stream's application properties and by its process (Discord's voice engine plays as "WEBRTC VoiceEngine"). Applications keep playing to the speakers as before. Without PipeWire, all system audio is captured, with a warning.
 - **Audio without Discord on Windows** uses WASAPI process loopback (`wasapi2src loopback-mode=exclude-process-tree`) with Discord's root process. It needs Windows build 20348 or later; older versions capture all system audio, with a warning. Only one process tree can be left out, and only if Discord is already running when the stream starts.

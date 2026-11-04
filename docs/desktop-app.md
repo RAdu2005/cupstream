@@ -7,3 +7,9 @@ While it runs, the app keeps a realtime WebSocket open with that token (no `tab`
 ## Windows installer
 
 The NSIS installer (per user, no administrator rights) includes a trimmed GStreamer runtime: only the plugins the app uses (capture, the encoders, WebRTC, Opus, WASAPI), listed in `companion/scripts/gstreamer-plugins.txt`, and the DLLs they need. The app uses only that runtime, so it works without GStreamer installed and is not disturbed by one that is. CI builds the bundle with `companion/scripts/gstreamer-bundle.ps1`, installs the result and runs `cupstream-cli check` against it; [companion/README.md](../companion/README.md) has the details.
+
+## Low-quality version
+
+When `POST /api/streams` answers `lowQuality.publish: true` and the streamer has *Send a low-quality version* on (the default, in the app's settings), the app also publishes a second, smaller version of the stream for viewers on slow connections ([low-quality versions](low-quality.md)): 720p at 30 fps and 1.2 Mbit/s, or 480p at 0.8 Mbit/s when the stream itself is 720p or smaller, H.264 without B-frames, with the same Opus audio. It is a second encode of the same capture, published with WHIP at the stream's `whipUrl` plus `?quality=low` once the stream's own session is connected.
+
+It never costs the stream itself: its queue holds one frame and drops the rest when its encoder falls behind, and an error in it removes only it. It uses the stream's hardware encoder when there is one (a second session on the GPU), and OpenH264 or x264 otherwise or when the GPU refuses another session; after a failure it is tried again, up to five times. The app shows whether it is being sent while live; `cupstream-cli publish` sends it too (`--no-low` to skip it) and `cupstream-cli watch --low` plays it.

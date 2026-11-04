@@ -87,6 +87,9 @@ pub struct Settings {
     pub audio_app: String,
     /// Starts and stops the stream, e.g. "Ctrl+Shift+F9"; empty: none.
     pub hotkey: String,
+    /// Also send a low-quality version for viewers on slow connections,
+    /// when the server takes one.
+    pub low_quality: bool,
     /// The screen-sharing portal's token for the last choice (Linux).
     pub restore_token: Option<String>,
     /// What to capture on X11 and Windows: "monitor:<n>", "window:<id>".
@@ -106,6 +109,7 @@ impl Default for Settings {
             audio: Audio::ExceptDiscord,
             audio_app: String::new(),
             hotkey: "Ctrl+Shift+F9".into(),
+            low_quality: true,
             restore_token: None,
             source: None,
         }

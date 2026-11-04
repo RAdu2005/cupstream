@@ -13,6 +13,7 @@ use gst::prelude::*;
 use crate::audio::AudioCapture;
 use crate::capture::Capture;
 use crate::encoder::{self, Candidate, Codec};
+use crate::low::{LowCtl, LowSettings, LowState};
 
 /// Where to publish: a WHIP endpoint and its Bearer token.
 #[derive(Clone, Debug)]
@@ -42,6 +43,7 @@ pub struct Publisher {
     pub encoder_info: &'static Candidate,
     _capture: Capture,
     audio: Option<AudioCapture>,
+    low: Option<LowCtl>,
 }
 
 impl Publisher {
@@ -52,6 +54,7 @@ impl Publisher {
         encoder_info: &'static Candidate,
         video: VideoSettings,
         endpoint: &Endpoint,
+        low: Option<LowSettings>,
     ) -> anyhow::Result<Self> {
         let pipeline = gst::Pipeline::with_name("cupstream");
 
@@ -93,8 +96,14 @@ impl Publisher {
                 .build()?,
             Codec::Av1 => gst::ElementFactory::make("av1parse").build()?,
         };
+        // The capture feeds the stream and, later, its low-quality version.
+        let video_tee = gst::ElementFactory::make("tee")
+            .name("video-tee")
+            .property("allow-not-linked", true)
+            .build()?;
         pipeline.add_many([
             capture.bin.upcast_ref(),
+            &video_tee,
             &queue,
             upload.upcast_ref(),
             &enc,
@@ -103,6 +112,7 @@ impl Publisher {
         ])?;
         gst::Element::link_many([
             capture.bin.upcast_ref(),
+            &video_tee,
             &queue,
             upload.upcast_ref(),
             &enc,
@@ -123,9 +133,34 @@ impl Publisher {
                 .property("inband-fec", true)
                 .property_from_str("frame-size", "10")
                 .build()?;
-            pipeline.add_many([audio.bin.upcast_ref(), &queue, &opus])?;
-            gst::Element::link_many([audio.bin.upcast_ref(), &queue, &opus, &sink])?;
+            // Encoded once; the low-quality version sends the same Opus.
+            let audio_tee = gst::ElementFactory::make("tee")
+                .name("audio-tee")
+                .property("allow-not-linked", true)
+                .build()?;
+            let out = gst::ElementFactory::make("queue").build()?;
+            pipeline.add_many([audio.bin.upcast_ref(), &queue, &opus, &audio_tee, &out])?;
+            gst::Element::link_many([
+                audio.bin.upcast_ref(),
+                &queue,
+                &opus,
+                &audio_tee,
+                &out,
+                &sink,
+            ])?;
         }
+
+        let low = low.map(|settings| {
+            let ctl = LowCtl::new(
+                &pipeline,
+                video_tee.clone(),
+                pipeline.by_name("audio-tee"),
+                encoder_info,
+                settings,
+            );
+            ctl.start_when_connected(&sink);
+            ctl
+        });
 
         Ok(Self {
             pipeline,
@@ -133,6 +168,7 @@ impl Publisher {
             encoder_info,
             _capture: capture,
             audio,
+            low,
         })
     }
 
@@ -161,44 +197,33 @@ impl Publisher {
                 why.as_deref().unwrap_or("no reason given")
             ));
         }
-        self.keyframes_until_connected();
+        if let Some(sink) = self.pipeline.by_name("whip") {
+            keyframes_until_connected(&sink, &self.encoder);
+        }
         Ok(())
     }
 
-    /// Before the WHIP session exists, whipclientsink inspects the stream
-    /// and waits for a keyframe, which with a long keyframe interval takes
-    /// seconds. Ask for one every 250 ms until the session is up and
-    /// MediaMTX asks itself.
-    fn keyframes_until_connected(&self) {
-        let connected = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        if let Some(sink) = self.pipeline.by_name("whip") {
-            let c = connected.clone();
-            sink.connect("consumer-added", false, move |_| {
-                c.store(true, std::sync::atomic::Ordering::Relaxed);
-                None
-            });
-        }
-        let Some(pad) = self.encoder.static_pad("src") else {
-            return;
+    /// Sorts out an error from the bus: errors of the low-quality version
+    /// are handled here (it is removed and tried again) and give None; any
+    /// other error stops the stream and is returned.
+    pub fn check(&self, msg: &gst::Message) -> Option<String> {
+        let gst::MessageView::Error(e) = msg.view() else {
+            return None;
         };
-        let pad = pad.downgrade();
-        std::thread::spawn(move || {
-            for _ in 0..120 {
-                if connected.load(std::sync::atomic::Ordering::Relaxed) {
-                    return;
-                }
-                let Some(pad) = pad.upgrade() else { return };
-                pad.send_event(
-                    gst_video::UpstreamForceKeyUnitEvent::builder()
-                        .all_headers(true)
-                        .build(),
-                );
-                drop(pad);
-                std::thread::sleep(std::time::Duration::from_millis(250));
-            }
-        });
+        if self.low.as_ref().is_some_and(|l| l.handle_error(msg)) {
+            return None;
+        }
+        Some(format!(
+            "{} ({})",
+            e.error(),
+            e.debug().map(|d| d.to_string()).unwrap_or_default()
+        ))
     }
 
+    /// Where the low-quality version stands; None when none is published.
+    pub fn low_state(&self) -> Option<LowState> {
+        self.low.as_ref().map(LowCtl::state)
+    }
     pub fn bus(&self) -> gst::Bus {
         self.pipeline.bus().expect("pipelines have a bus")
     }
@@ -218,6 +243,9 @@ impl Publisher {
     /// session with its own async runtime and must not be stopped from
     /// inside another one (the app's and the CLI's tokio).
     pub fn stop(&self) {
+        if let Some(low) = &self.low {
+            low.stop();
+        }
         let pipeline = &self.pipeline;
         std::thread::scope(|s| {
             s.spawn(|| {
@@ -239,11 +267,43 @@ impl Drop for Publisher {
     }
 }
 
+/// Before the WHIP session exists, whipclientsink inspects the stream and
+/// waits for a keyframe, which with a long keyframe interval takes seconds.
+/// Ask for one every 250 ms until the session is up and MediaMTX asks
+/// itself.
+pub(crate) fn keyframes_until_connected(sink: &gst::Element, encoder: &gst::Element) {
+    let connected = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let c = connected.clone();
+    sink.connect("consumer-added", false, move |_| {
+        c.store(true, std::sync::atomic::Ordering::Relaxed);
+        None
+    });
+    let Some(pad) = encoder.static_pad("src") else {
+        return;
+    };
+    let pad = pad.downgrade();
+    std::thread::spawn(move || {
+        for _ in 0..120 {
+            if connected.load(std::sync::atomic::Ordering::Relaxed) {
+                return;
+            }
+            let Some(pad) = pad.upgrade() else { return };
+            pad.send_event(
+                gst_video::UpstreamForceKeyUnitEvent::builder()
+                    .all_headers(true)
+                    .build(),
+            );
+            drop(pad);
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+    });
+}
+
 /// whipclientsink cannot renegotiate, so the encoded caps must never
 /// change. Some parsers (h264parse in GStreamer 1.24) first pass the
 /// encoder's caps on and add these fields once they parsed the SPS; they
 /// are dropped so both caps are the same.
-fn keep_caps_stable(parse: &gst::Element) {
+pub(crate) fn keep_caps_stable(parse: &gst::Element) {
     const ADDED_LATER: [&str; 4] = [
         "coded-picture-structure",
         "chroma-format",
@@ -270,7 +330,7 @@ fn keep_caps_stable(parse: &gst::Element) {
 /// Fixes the encoded size to the first frame's: when a captured window is
 /// resized, later frames are scaled (with borders) to the same size rather
 /// than changing the stream's caps.
-fn lock_size(enc: &gst::Element, size: gst::Element) {
+pub(crate) fn lock_size(enc: &gst::Element, size: gst::Element) {
     let Some(pad) = enc.static_pad("sink") else {
         return;
     };

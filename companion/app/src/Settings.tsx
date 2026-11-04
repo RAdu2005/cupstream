@@ -94,6 +94,21 @@ export function SettingsView({ status, onBack }: { status: Status; onBack: () =>
             ))}
           </select>
         </Field>
+        <label className="flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            className="mt-0.5 accent-accent"
+            checked={settings.lowQuality}
+            onChange={(e) => update({ lowQuality: e.target.checked })}
+          />
+          <span>
+            <span className="font-medium">Send a low-quality version</span>
+            <span className="block text-xs text-muted">
+              A second, 720p version for viewers on slow connections, when the server takes one. It uses a little more
+              upload (about 1.2 Mbit/s).
+            </span>
+          </span>
+        </label>
       </Card>
 
       <Card className="space-y-3 p-4">

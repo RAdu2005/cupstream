@@ -9,6 +9,7 @@ use cupstream_media::audio::{self, AudioMode};
 use cupstream_media::capture::{self, VideoSource};
 use cupstream_media::encoder::{self, Codec};
 use cupstream_media::gst;
+use cupstream_media::low::LowSettings;
 use cupstream_media::publish::{Endpoint, Publisher, VideoSettings};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -59,6 +60,9 @@ enum Command {
         /// PCM and a frame per second, for quality checks.
         #[arg(long)]
         record: Option<PathBuf>,
+        /// Watch the stream's low-quality version.
+        #[arg(long)]
+        low: bool,
     },
 }
 
@@ -105,6 +109,9 @@ struct PublishArgs {
     /// Ask for the screen again instead of reusing the last choice.
     #[arg(long)]
     pick: bool,
+    /// Do not publish a low-quality version, even when the server takes one.
+    #[arg(long)]
+    no_low: bool,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -184,13 +191,18 @@ async fn run(bundled: bool) -> anyhow::Result<()> {
             room,
             seconds,
             record,
+            low,
         } => {
             cupstream_media::init()?;
             let client = Client::new(&cli.server, load("tokens.json").get(&cli.server).cloned())?;
             let Some(id) = client.room_streams(&room).await?.into_iter().next() else {
                 bail!("nobody is live in {room}");
             };
-            let url = client.whep_url(&id).to_string();
+            let mut url = client.whep_url(&id);
+            if low {
+                url.query_pairs_mut().append_pair("quality", "low");
+            }
+            let url = url.to_string();
             let token = client.token().map(str::to_owned);
             let report = tokio::task::spawn_blocking(move || {
                 if let Some(dir) = &record {
@@ -420,6 +432,15 @@ async fn publish(server: &str, args: PublishArgs) -> anyhow::Result<()> {
             url: dest.whip_url.clone(),
             token: dest.token.clone(),
         },
+        (dest.low_quality && !args.no_low).then(|| {
+            LowSettings::for_stream(
+                Endpoint {
+                    url: dest.low_whip_url(),
+                    token: dest.token.clone(),
+                },
+                args.height,
+            )
+        }),
     )?;
     publisher.start()?;
     match &dest.room_slug {
@@ -448,6 +469,7 @@ async fn run_until_stopped(p: &Publisher, duration: Option<Duration>) -> anyhow:
     let deadline = duration.map(|d| tokio::time::Instant::now() + d);
     let mut tick = tokio::time::interval(Duration::from_millis(100));
     let mut last_audio = String::new();
+    let mut last_low = None;
     let ctrl_c = tokio::signal::ctrl_c();
     tokio::pin!(ctrl_c);
     loop {
@@ -460,13 +482,11 @@ async fn run_until_stopped(p: &Publisher, duration: Option<Duration>) -> anyhow:
         }
         while let Some(msg) = bus.pop() {
             match msg.view() {
-                gst::MessageView::Error(e) => {
-                    p.dump_dot("cupstream-error");
-                    bail!(
-                        "{} ({})",
-                        e.error(),
-                        e.debug().map(|d| d.to_string()).unwrap_or_default()
-                    );
+                gst::MessageView::Error(_) => {
+                    if let Some(e) = p.check(&msg) {
+                        p.dump_dot("cupstream-error");
+                        bail!("{e}");
+                    }
                 }
                 gst::MessageView::Warning(w) => eprintln!("warning: {}", w.error()),
                 gst::MessageView::Eos(_) => return Ok(()),
@@ -479,6 +499,13 @@ async fn run_until_stopped(p: &Publisher, duration: Option<Duration>) -> anyhow:
                 eprintln!("audio: {now}");
                 last_audio = now;
             }
+        }
+        let low = p.low_state();
+        if low != last_low {
+            if let Some(state) = &low {
+                eprintln!("low-quality version: {state:?}");
+            }
+            last_low = low;
         }
     }
 }

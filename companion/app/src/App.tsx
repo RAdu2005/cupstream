@@ -170,6 +170,12 @@ function Main({
               {status.bitrateKbps ? `${(status.bitrateKbps / 1000).toFixed(1)} Mbit/s` : '–'}
               {status.limited && <span className="text-muted"> (lowered for viewers)</span>}
             </dd>
+            {status.low && (
+              <>
+                <dt className="text-muted">Low quality</dt>
+                <dd title={status.low.detail}>{lowLabel(status.low)}</dd>
+              </>
+            )}
           </dl>
           {status.audio.length > 0 && (
             <div className="space-y-1 text-sm">
@@ -187,4 +193,20 @@ function Main({
       {!live && <p className="text-xs text-muted">Going live copies the room link to the clipboard.</p>}
     </div>
   );
+}
+
+/** The low-quality version's state, in a few words. */
+function lowLabel(low: NonNullable<Status['low']>): string {
+  switch (low.state) {
+    case 'live':
+      return `Sending (${low.detail})`;
+    case 'waiting':
+      return 'Starting…';
+    case 'retrying':
+      return 'Trying again…';
+    case 'failed':
+      return 'Not sent: it failed';
+    case 'off':
+      return `Not sent: ${low.detail}`;
+  }
 }
