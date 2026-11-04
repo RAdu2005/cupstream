@@ -110,16 +110,25 @@ pub(crate) fn limit_frame_rate(pad: &gst::Pad, fps: u32) {
 
 /// Opens a source. For the portal this shows the system dialog, unless the
 /// restore token is still valid.
-pub async fn open(source: &VideoSource, fps: u32) -> anyhow::Result<Capture> {
-    let capture = open_source(source, fps).await?;
+///
+/// `copy`: copy each frame out of PipeWire's buffer at once (pipewiresrc
+/// `always-copy`), for encoders that take frames in system memory. PipeWire
+/// then shares its frames in shared memory, and the compositor's pool is
+/// small (KWin: 4 buffers): holding them while frames wait in queues and get
+/// converted makes the compositor skip frames (30 instead of 60 fps).
+/// Encoders on the GPU get DMA-BUF frames and copy them on the GPU, right
+/// after the capture (see `Candidate::capture_copy_description`).
+pub async fn open(source: &VideoSource, fps: u32, copy: bool) -> anyhow::Result<Capture> {
+    let capture = open_source(source, fps, copy).await?;
     if let Some(pad) = capture.bin.static_pad("src") {
         limit_frame_rate(&pad, fps);
     }
     Ok(capture)
 }
 
-async fn open_source(source: &VideoSource, fps: u32) -> anyhow::Result<Capture> {
+async fn open_source(source: &VideoSource, fps: u32, copy: bool) -> anyhow::Result<Capture> {
     let rate = capture_tail();
+    let copy = if copy { " always-copy=true" } else { "" };
     match source {
         VideoSource::Test => Ok(Capture {
             bin: bin_from(&format!(
@@ -129,11 +138,13 @@ async fn open_source(source: &VideoSource, fps: u32) -> anyhow::Result<Capture> 
             _keep: Box::new(()),
         }),
         #[cfg(target_os = "linux")]
-        VideoSource::Portal { restore_token } => portal::open(restore_token.as_deref(), rate).await,
+        VideoSource::Portal { restore_token } => {
+            portal::open(restore_token.as_deref(), rate, copy).await
+        }
         #[cfg(target_os = "linux")]
         VideoSource::PipeWire { target } => Ok(Capture {
             bin: bin_from(&format!(
-                "pipewiresrc target-object={target} do-timestamp=true keepalive-time=500 ! {rate}"
+                "pipewiresrc target-object={target} do-timestamp=true keepalive-time=500{copy} ! {rate}"
             ))?,
             restore_token: None,
             _keep: Box::new(()),
@@ -193,7 +204,11 @@ mod portal {
         _session: ashpd::desktop::Session<Screencast>,
     }
 
-    pub async fn open(restore_token: Option<&str>, rate: &str) -> anyhow::Result<Capture> {
+    pub async fn open(
+        restore_token: Option<&str>,
+        rate: &str,
+        copy: &str,
+    ) -> anyhow::Result<Capture> {
         let proxy = Screencast::new()
             .await
             .context("the screen-sharing portal is not available")?;
@@ -228,7 +243,7 @@ mod portal {
         // keepalive-time repeats the last frame when the screen does not
         // change, so a viewer asking for a keyframe never waits long.
         let bin = bin_from(&format!(
-            "pipewiresrc fd={} path={node} do-timestamp=true keepalive-time=500 ! {rate}",
+            "pipewiresrc fd={} path={node} do-timestamp=true keepalive-time=500{copy} ! {rate}",
             fd.as_raw_fd()
         ))?;
         Ok(Capture {
