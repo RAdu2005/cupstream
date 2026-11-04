@@ -20,6 +20,8 @@ export interface Status {
   audio: { name: string; captured: boolean }[];
   error: string | null;
   hotkeyError: string | null;
+  /** Going live first shows the app's picker (Windows). */
+  picker: boolean;
 }
 
 export type Preset = '720p30' | '1080p30' | '1080p60' | '1440p60' | '2160p60' | 'source';
@@ -47,6 +49,17 @@ export interface Encoder {
   error: string | null;
 }
 
+/** A screen or window the picker offers. */
+export interface Shareable {
+  id: string;
+  kind: 'monitor' | 'window';
+  title: string;
+  width: number;
+  height: number;
+  /** A PNG data URL, when a frame could be captured. */
+  thumbnail: string | null;
+}
+
 export interface Account {
   startMode: 'discord_auto' | 'link';
   obsFallback: string;
@@ -72,8 +85,9 @@ export const commands = {
   status: () => invoke<Status>('status'),
   signIn: () => invoke<void>('sign_in'),
   signOut: () => invoke<void>('sign_out'),
-  goLive: (room: string | null, linkFallback: boolean, replace: boolean) =>
-    invoke<void>('go_live', { room, linkFallback, replace }),
+  goLive: (room: string | null, linkFallback: boolean, replace: boolean, source: string | null) =>
+    invoke<void>('go_live', { room, linkFallback, replace, source }),
+  listSources: () => invoke<Shareable[]>('list_sources'),
   stop: () => invoke<void>('stop'),
   getSettings: () => invoke<Settings>('get_settings'),
   saveSettings: (settings: Settings) => invoke<void>('save_settings', { settings }),

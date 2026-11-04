@@ -1449,6 +1449,7 @@ name = "cupstream-app"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "cupstream-client",
  "cupstream-media",
  "futures-util",
@@ -1508,9 +1509,11 @@ dependencies = [
  "ashpd",
  "gst-plugin-webrtc",
  "gstreamer",
+ "gstreamer-app",
  "gstreamer-video",
  "gstreamer-webrtc",
  "pipewire",
+ "png",
  "reqwest",
  "rustls 0.23.46",
  "serde",
@@ -1518,6 +1521,7 @@ dependencies = [
  "sysinfo",
  "tokio",
  "tracing",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

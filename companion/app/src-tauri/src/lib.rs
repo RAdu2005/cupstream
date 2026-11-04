@@ -36,6 +36,9 @@ const MIN_VIDEO_KBPS: u32 = 500;
 #[serde(rename_all = "camelCase")]
 pub struct Status {
     pub user: Option<User>,
+    /// Going live first shows the app's own picker of screens and windows
+    /// (Windows; on Linux the system's dialog asks).
+    pub picker: bool,
     /// "idle", "signingIn", "starting", "live" or "reconnecting".
     pub phase: &'static str,
     pub room_url: Option<String>,
@@ -288,6 +291,7 @@ impl Core {
         self.update_status(|s| {
             *s = Status {
                 phase: "idle",
+                picker: cfg!(windows),
                 hotkey_error: s.hotkey_error.clone(),
                 ..Default::default()
             }
@@ -318,13 +322,8 @@ impl Core {
             };
         }
         #[cfg(windows)]
-        if let Some(src) = &settings.source {
-            if let Some(h) = src.strip_prefix("window:").and_then(|h| h.parse().ok()) {
-                return VideoSource::Window(h);
-            }
-            if let Some(n) = src.strip_prefix("monitor:").and_then(|n| n.parse().ok()) {
-                return VideoSource::Monitor(n);
-            }
+        if let Some(src) = settings.source.as_deref().and_then(capture::windows::parse) {
+            return src;
         }
         let _ = settings;
         default
@@ -701,8 +700,15 @@ async fn go_live(
     room: Option<String>,
     link_fallback: bool,
     replace: bool,
+    source: Option<String>,
 ) -> CmdResult<()> {
     let core = core.inner().clone();
+    // The picker's choice; it is also what the next stream starts with.
+    if let Some(source) = source {
+        let mut settings = core.settings.lock().unwrap();
+        settings.source = Some(source);
+        settings.save(&core.settings_path).map_err(CmdError::from)?;
+    }
     Ok(core
         .go_live(StartOptions {
             room,
@@ -710,6 +716,72 @@ async fn go_live(
             replace,
         })
         .await?)
+}
+
+/// A screen or window in the picker, with a PNG thumbnail as a data URL.
+#[derive(Serialize)]
+#[cfg_attr(not(windows), allow(dead_code))]
+#[serde(rename_all = "camelCase")]
+struct SourceView {
+    id: String,
+    kind: &'static str,
+    title: String,
+    width: i32,
+    height: i32,
+    thumbnail: Option<String>,
+}
+
+/// What can be shared, for the picker (Windows; empty elsewhere).
+#[tauri::command]
+async fn list_sources() -> CmdResult<Vec<SourceView>> {
+    #[cfg(windows)]
+    {
+        use base64::Engine;
+        let list = tokio::task::spawn_blocking(|| {
+            let sources = capture::windows::list();
+            // A frame each, four at a time.
+            let thumbs: Vec<Option<String>> = std::thread::scope(|s| {
+                sources
+                    .chunks(4)
+                    .flat_map(|chunk| {
+                        let handles: Vec<_> = chunk
+                            .iter()
+                            .map(|src| s.spawn(|| capture::windows::thumbnail(&src.id, 320).ok()))
+                            .collect();
+                        handles
+                            .into_iter()
+                            .map(|h| h.join().ok().flatten())
+                            .collect::<Vec<_>>()
+                    })
+                    .map(|png| {
+                        png.map(|p| {
+                            format!(
+                                "data:image/png;base64,{}",
+                                base64::engine::general_purpose::STANDARD.encode(p)
+                            )
+                        })
+                    })
+                    .collect()
+            });
+            sources
+                .into_iter()
+                .zip(thumbs)
+                .map(|(src, thumbnail)| SourceView {
+                    id: src.id,
+                    kind: src.kind,
+                    title: src.title,
+                    width: src.width,
+                    height: src.height,
+                    thumbnail,
+                })
+                .collect()
+        })
+        .await
+        .map_err(|e| CmdError::from(anyhow::Error::from(e)))?;
+        Ok(list)
+    }
+    #[cfg(not(windows))]
+    Ok(Vec::new())
 }
 
 #[tauri::command]
@@ -911,6 +983,7 @@ pub fn run() {
                 live: Mutex::default(),
                 status: Mutex::new(Status {
                     phase: "idle",
+                    picker: cfg!(windows),
                     ..Default::default()
                 }),
                 realtime: Mutex::default(),
@@ -977,6 +1050,7 @@ pub fn run() {
             sign_in,
             sign_out,
             go_live,
+            list_sources,
             stop,
             get_settings,
             save_settings,

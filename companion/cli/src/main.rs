@@ -40,6 +40,13 @@ enum Command {
     Encoders,
     /// Check that every GStreamer element the app uses is available.
     Check,
+    /// List the screens and windows the app's picker offers (Windows), with
+    /// their IDs for `publish --source`.
+    Sources {
+        /// Also save a thumbnail of each into this directory.
+        #[arg(long)]
+        thumbnails: Option<PathBuf>,
+    },
     /// Show which applications' audio would be captured, until Ctrl+C.
     Audio {
         /// except-discord, all, or app:<name>.
@@ -159,6 +166,42 @@ async fn run(bundled: bool) -> anyhow::Result<()> {
                 cupstream_media::REQUIRED_ELEMENTS.len()
             );
             Ok(())
+        }
+        Command::Sources { thumbnails } => {
+            #[cfg(windows)]
+            {
+                cupstream_media::init()?;
+                if let Some(dir) = &thumbnails {
+                    std::fs::create_dir_all(dir)?;
+                }
+                for (i, src) in capture::windows::list().into_iter().enumerate() {
+                    let mut line = format!(
+                        "{:<28} {:>5}x{:<5} {}",
+                        src.id, src.width, src.height, src.title
+                    );
+                    if let Some(dir) = &thumbnails {
+                        let t = std::time::Instant::now();
+                        match capture::windows::thumbnail(&src.id, 320) {
+                            Ok(png) => {
+                                std::fs::write(dir.join(format!("{i:02}-{}.png", src.kind)), &png)?;
+                                line += &format!(
+                                    "  [thumbnail {} KB, {} ms]",
+                                    png.len() / 1024,
+                                    t.elapsed().as_millis()
+                                );
+                            }
+                            Err(e) => line += &format!("  [no thumbnail: {e:#}]"),
+                        }
+                    }
+                    println!("{line}");
+                }
+                Ok(())
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = thumbnails;
+                bail!("the picker is Windows-only; Linux uses the system's screen-sharing dialog")
+            }
         }
         Command::Encoders => {
             cupstream_media::init()?;
@@ -363,6 +406,8 @@ fn parse_source(s: Option<&str>, restore_token: Option<String>) -> anyhow::Resul
         }
         #[cfg(windows)]
         "window" => VideoSource::Window(num(arg)?),
+        #[cfg(windows)]
+        "monitor-handle" => VideoSource::MonitorHandle(num(arg)?),
         _ => bail!("unknown source {s}"),
     })
 }

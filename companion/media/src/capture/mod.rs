@@ -22,6 +22,9 @@ pub enum VideoSource {
     /// A monitor by index.
     #[cfg(windows)]
     Monitor(u32),
+    /// A monitor by its HMONITOR (what the app's picker lists).
+    #[cfg(windows)]
+    MonitorHandle(u64),
     /// A window by its HWND.
     #[cfg(windows)]
     Window(u64),
@@ -101,6 +104,14 @@ pub async fn open(source: &VideoSource, fps: u32) -> anyhow::Result<Capture> {
             _keep: Box::new(()),
         }),
         #[cfg(windows)]
+        VideoSource::MonitorHandle(h) => Ok(Capture {
+            bin: bin_from(&format!(
+                "d3d11screencapturesrc capture-api=wgc show-cursor=true monitor-handle={h} ! {rate}"
+            ))?,
+            restore_token: None,
+            _keep: Box::new(()),
+        }),
+        #[cfg(windows)]
         VideoSource::Window(hwnd) => Ok(Capture {
             bin: bin_from(&format!(
                 "d3d11screencapturesrc capture-api=wgc show-cursor=true window-handle={hwnd} ! {rate}"
@@ -110,6 +121,9 @@ pub async fn open(source: &VideoSource, fps: u32) -> anyhow::Result<Capture> {
         }),
     }
 }
+
+#[cfg(windows)]
+pub mod windows;
 
 #[cfg(target_os = "linux")]
 mod portal {

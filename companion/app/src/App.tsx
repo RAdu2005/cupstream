@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Card } from '@web/components/ui';
 import { commands, errorMessage, events, isCmdError, type Status } from './api';
+import { Picker } from './Picker';
 import { SettingsView } from './Settings';
 
 /** A question before going live, from the server's refusal. */
@@ -9,6 +10,7 @@ interface Prompt {
   action: string;
   retry: { linkFallback: boolean; replace: boolean };
   room: string | null;
+  source: string | null;
 }
 
 export function App() {
@@ -16,36 +18,71 @@ export function App() {
   const [view, setView] = useState<'main' | 'settings'>('main');
   const [prompt, setPrompt] = useState<Prompt | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** The picker is open for going live into this room (null: start mode). */
+  const [picking, setPicking] = useState<{ room: string | null } | null>(null);
+  const pickerRef = useRef(false);
+  pickerRef.current = status?.picker ?? false;
 
-  const goLive = useCallback(async (room: string | null, linkFallback = false, replace = false) => {
-    setPrompt(null);
-    setError(null);
-    try {
-      await commands.goLive(room, linkFallback, replace);
-    } catch (e) {
-      if (isCmdError(e) && e.code === 'discord_unavailable') {
-        setPrompt({
-          message: `${e.message}.`,
-          action: 'Stream to my link room',
-          retry: { linkFallback: true, replace },
-          room,
-        });
-      } else if (isCmdError(e) && e.code === 'already_live') {
-        setPrompt({ message: e.message, action: 'End it and go live here', retry: { linkFallback, replace: true }, room });
-      } else {
-        setError(errorMessage(e));
+  const goLive = useCallback(
+    async (room: string | null, linkFallback = false, replace = false, source: string | null = null) => {
+      setPrompt(null);
+      setError(null);
+      try {
+        await commands.goLive(room, linkFallback, replace, source);
+      } catch (e) {
+        if (isCmdError(e) && e.code === 'discord_unavailable') {
+          setPrompt({
+            message: `${e.message}.`,
+            action: 'Stream to my link room',
+            retry: { linkFallback: true, replace },
+            room,
+            source,
+          });
+        } else if (isCmdError(e) && e.code === 'already_live') {
+          setPrompt({
+            message: e.message,
+            action: 'End it and go live here',
+            retry: { linkFallback, replace: true },
+            room,
+            source,
+          });
+        } else {
+          setError(errorMessage(e));
+        }
       }
-    }
-  }, []);
+    },
+    [],
+  );
+
+  /** Going live, from the button, the tray, the hotkey or the website. */
+  const requestGoLive = useCallback(
+    (room: string | null) => {
+      if (pickerRef.current) setPicking({ room });
+      else void goLive(room);
+    },
+    [goLive],
+  );
 
   useEffect(() => {
     void commands.status().then(setStatus);
-    const unlisten = [events.status(setStatus), events.goLiveRequest((room) => void goLive(room))];
+    const unlisten = [events.status(setStatus), events.goLiveRequest(requestGoLive)];
     return () => unlisten.forEach((p) => void p.then((f) => f()));
-  }, [goLive]);
+  }, [requestGoLive]);
 
   if (!status) return null;
   if (view === 'settings' && status.user) return <SettingsView status={status} onBack={() => setView('main')} />;
+  if (picking && status.user) {
+    return (
+      <Picker
+        onCancel={() => setPicking(null)}
+        onPick={(source) => {
+          const room = picking.room;
+          setPicking(null);
+          void goLive(room, false, false, source);
+        }}
+      />
+    );
+  }
 
   return (
     <div className="flex min-h-full flex-col gap-4 p-4">
@@ -58,7 +95,14 @@ export function App() {
         )}
       </header>
       {status.user ? (
-        <Main status={status} prompt={prompt} error={error ?? status.error} onGoLive={goLive} onCancel={() => setPrompt(null)} />
+        <Main
+          status={status}
+          prompt={prompt}
+          error={error ?? status.error}
+          onGoLive={goLive}
+          onRequestGoLive={requestGoLive}
+          onCancel={() => setPrompt(null)}
+        />
       ) : (
         <SignIn status={status} />
       )}
@@ -93,12 +137,14 @@ function Main({
   prompt,
   error,
   onGoLive,
+  onRequestGoLive,
   onCancel,
 }: {
   status: Status;
   prompt: Prompt | null;
   error: string | null;
-  onGoLive: (room: string | null, linkFallback?: boolean, replace?: boolean) => Promise<void>;
+  onGoLive: (room: string | null, linkFallback?: boolean, replace?: boolean, source?: string | null) => Promise<void>;
+  onRequestGoLive: (room: string | null) => void;
   onCancel: () => void;
 }) {
   const live = status.phase === 'live' || status.phase === 'reconnecting';
@@ -115,7 +161,7 @@ function Main({
         <Card className="space-y-3">
           <p className="text-sm">{prompt.message}</p>
           <div className="flex gap-2">
-            <Button className="flex-1" onClick={() => void onGoLive(prompt.room, prompt.retry.linkFallback, prompt.retry.replace)}>
+            <Button className="flex-1" onClick={() => void onGoLive(prompt.room, prompt.retry.linkFallback, prompt.retry.replace, prompt.source)}>
               {prompt.action}
             </Button>
             <Button variant="secondary" onClick={onCancel}>
@@ -128,7 +174,7 @@ function Main({
           Stop live
         </Button>
       ) : (
-        <Button className="h-14 w-full text-base" disabled={starting} onClick={() => void onGoLive(null)}>
+        <Button className="h-14 w-full text-base" disabled={starting} onClick={() => onRequestGoLive(null)}>
           {starting ? 'Starting…' : 'Go live'}
         </Button>
       )}
