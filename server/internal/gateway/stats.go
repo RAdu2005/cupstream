@@ -67,8 +67,8 @@ func seconds(s float64) time.Duration { return time.Duration(s * float64(time.Se
 // computed from byte counters between two calls.
 func (g *Gateway) applyStatsLocked(paths []mediamtx.Path, sessions []mediamtx.Session, now time.Time) {
 	for _, p := range paths {
-		id, ok := streamIDFromPath(p.Name)
-		if s := g.streams[id]; ok && s != nil {
+		id, v, ok := parsePath(p.Name)
+		if s := g.streams[id]; ok && v == VariantMain && s != nil {
 			s.stats.pub.KeyFrameInterval = 0
 			if p.KeyFrameInterval != nil {
 				s.stats.pub.KeyFrameInterval = seconds(*p.KeyFrameInterval)
@@ -85,16 +85,20 @@ func (g *Gateway) applyStatsLocked(paths []mediamtx.Path, sessions []mediamtx.Se
 			if s == nil {
 				continue
 			}
-			prev := s.stats.in
-			s.stats.pub.Bitrate = bitrate(prev, ms.InboundBytes, now)
-			s.stats.pub.LossRatio = 0
+			st := &s.stats
+			if sess.variant == VariantLow {
+				st = &s.lowStats
+			}
+			prev := st.in
+			st.pub.Bitrate = bitrate(prev, ms.InboundBytes, now)
+			st.pub.LossRatio = 0
 			if !prev.at.IsZero() && ms.InboundRTPPackets >= prev.packets && ms.InboundRTPPacketsLost >= prev.lost {
 				got, lost := ms.InboundRTPPackets-prev.packets, ms.InboundRTPPacketsLost-prev.lost
 				if got+lost > 0 {
-					s.stats.pub.LossRatio = float64(lost) / float64(got+lost)
+					st.pub.LossRatio = float64(lost) / float64(got+lost)
 				}
 			}
-			s.stats.in = counter{bytes: ms.InboundBytes, packets: ms.InboundRTPPackets, lost: ms.InboundRTPPacketsLost, at: now}
+			st.in = counter{bytes: ms.InboundBytes, packets: ms.InboundRTPPackets, lost: ms.InboundRTPPacketsLost, at: now}
 			continue
 		}
 		st := &sess.stats

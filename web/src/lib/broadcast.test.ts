@@ -21,12 +21,14 @@ const stream: Stream = {
   viewers: 0,
   bitrate: 0,
   lossRatio: 0,
+  lowQuality: 'none',
 };
 const started: StartStreamResponse = {
   stream,
   roomSlug: 'alice-room',
   whipUrl: 'http://localhost/api/streams/abcdefghijklmnop/whip',
   token: 'tok',
+  lowQuality: { publish: true },
 };
 
 type Call = { method: string; path: string; body?: unknown };

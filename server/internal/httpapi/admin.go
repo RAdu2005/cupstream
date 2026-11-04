@@ -82,7 +82,7 @@ func (s *Server) adminOverview(w http.ResponseWriter, r *http.Request, cur auth.
 		}
 		out.Streams = append(out.Streams, api.AdminStream{Stream: st, RoomSlug: slug, Outgoing: as.Outgoing})
 		out.Viewers += as.Watching
-		out.Incoming += as.Stats.Bitrate
+		out.Incoming += as.Stats.Bitrate + as.LowBitrate
 		out.Outgoing += as.Outgoing
 	}
 	banned, err := s.DB.ListBannedUsers(r.Context())

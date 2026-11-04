@@ -50,6 +50,10 @@ type Config struct {
 	EgressLimit      int64
 	EgressInterfaces []string
 
+	// LowQuality accepts low-quality versions of streams from senders and
+	// offers them to viewers (CUPSTREAM_LOW_QUALITY=on|off, on by default).
+	LowQuality bool
+
 	// DevLogin enables the passwordless development login. It is refused
 	// unless PublicURL is a local development host.
 	DevLogin bool
@@ -108,6 +112,19 @@ func load(getenv func(string) string) (*Config, error) {
 		}
 		return b
 	}
+	parseSwitch := func(key string, def bool) bool {
+		switch raw := strings.ToLower(get(key, "")); raw {
+		case "":
+			return def
+		case "on":
+			return true
+		case "off":
+			return false
+		default:
+			errs = append(errs, fmt.Errorf("CUPSTREAM_%s: %q is not on or off", key, raw))
+			return def
+		}
+	}
 
 	c := &Config{
 		Addr:            get("ADDR", ":8080"),
@@ -120,6 +137,7 @@ func load(getenv func(string) string) (*Config, error) {
 		MediaMTXWebRTC:  parseURL("MEDIAMTX_WEBRTC", "http://127.0.0.1:8889"),
 		DevLogin:        parseBool("DEV_LOGIN", false),
 		NoRateLimits:    !parseBool("RATE_LIMITS", true),
+		LowQuality:      parseSwitch("LOW_QUALITY", true),
 		LogFormat:       get("LOG_FORMAT", "json"),
 		Google:          OAuthClient{ID: get("GOOGLE_CLIENT_ID", ""), Secret: get("GOOGLE_CLIENT_SECRET", "")},
 		Discord:         OAuthClient{ID: get("DISCORD_CLIENT_ID", ""), Secret: get("DISCORD_CLIENT_SECRET", "")},

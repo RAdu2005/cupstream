@@ -22,7 +22,7 @@ func TestDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Addr != ":8080" || c.DevLogin || c.NoRateLimits || c.EgressLimit != 800_000_000 || c.EgressInterfaces != nil || c.SecureCookies() || c.MediaMTXAPI.String() != "http://127.0.0.1:9997" {
+	if c.Addr != ":8080" || c.DevLogin || c.NoRateLimits || !c.LowQuality || c.EgressLimit != 800_000_000 || c.EgressInterfaces != nil || c.SecureCookies() || c.MediaMTXAPI.String() != "http://127.0.0.1:9997" {
 		t.Fatalf("unexpected defaults: %+v", c)
 	}
 }
@@ -40,6 +40,7 @@ func TestErrors(t *testing.T) {
 		"half google client":       {"CUPSTREAM_GOOGLE_CLIENT_ID": "id"},
 		"bad egress limit":         {"CUPSTREAM_EGRESS_LIMIT_MBPS": "-1"},
 		"admin without provider":   {"CUPSTREAM_ADMINS": "discord:1,12345"},
+		"bad low quality switch":   {"CUPSTREAM_LOW_QUALITY": "maybe"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := load(env(vars)); err == nil {
@@ -86,5 +87,17 @@ func TestAdmins(t *testing.T) {
 	c, err := load(env(map[string]string{"CUPSTREAM_ADMINS": " discord:123 ,google:abc,"}))
 	if err != nil || len(c.Admins) != 2 || !c.Admins["discord:123"] || !c.Admins["google:abc"] {
 		t.Fatalf("got %v, %v", err, c.Admins)
+	}
+}
+
+func TestLowQualitySwitch(t *testing.T) {
+	for raw, want := range map[string]bool{"on": true, "OFF": false, "off": false} {
+		c, err := load(env(map[string]string{"CUPSTREAM_LOW_QUALITY": raw}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.LowQuality != want {
+			t.Errorf("CUPSTREAM_LOW_QUALITY=%s: %v, want %v", raw, c.LowQuality, want)
+		}
 	}
 }

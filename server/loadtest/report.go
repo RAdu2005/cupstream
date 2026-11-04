@@ -96,7 +96,11 @@ func (r *reporter) line(elapsed time.Duration) {
 			// Receiving under 80% of the stream's bitrate, a while after
 			// starting.
 			settled := now.Sub(time.Unix(0, v.firstKey.Load())) > 2*time.Second
-			if !first && settled && r.o.bitrate > 0 && float64(db*8)/secs < 0.8*float64(r.o.bitrate) {
+			want := r.o.bitrate
+			if v.low {
+				want = r.o.lowBitrate
+			}
+			if !first && settled && want > 0 && float64(db*8)/secs < 0.8*float64(want) {
 				starved++
 			}
 		}

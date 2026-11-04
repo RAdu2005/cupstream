@@ -78,14 +78,15 @@ func (g *Gateway) HandleOBSPublish(w http.ResponseWriter, r *http.Request) {
 		g.WriteStartError(w, r, err)
 		return
 	}
-	if !g.forwardOffer(w, r, started.Stream, true, user.ID) && !started.Reconnect {
+	if !g.forwardOffer(w, r, started.Stream, VariantMain, true, user.ID) && !started.Reconnect {
 		g.EndStream(r.Context(), started.Stream.ID, EndFailedToStart)
 	}
 }
 
 // HandleTokenPublish serves POST /api/streams/{id}/whip for app and web
 // senders, with the stream's publish token as the bearer token. Reconnects
-// use the same URL and token.
+// use the same URL and token. With ?quality=low it publishes the stream's
+// low-quality version, which needs the stream's own publisher.
 func (g *Gateway) HandleTokenPublish(w http.ResponseWriter, r *http.Request) {
 	ls, ok := g.Stream(r.PathValue("id"))
 	if !ok {
@@ -96,6 +97,21 @@ func (g *Gateway) HandleTokenPublish(w http.ResponseWriter, r *http.Request) {
 	if !publishTokenValid(r, rec) {
 		writeErr(w, http.StatusUnauthorized, "", "invalid publish token")
 		return
+	}
+	variant, err := variantParam(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "", err.Error())
+		return
+	}
+	if variant == VariantLow {
+		if !g.LowEnabled {
+			writeErr(w, http.StatusForbidden, CodeLowQualityOff, "this server does not accept low-quality versions")
+			return
+		}
+		if !g.hasPublisher(rec.ID, VariantMain) {
+			writeErr(w, http.StatusConflict, CodeNoMainSession, "publish the stream before its low-quality version")
+			return
+		}
 	}
 	room, err := g.db.GetRoom(r.Context(), rec.RoomID)
 	if err != nil {
@@ -112,7 +128,7 @@ func (g *Gateway) HandleTokenPublish(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusForbidden, string(reason), "you may no longer stream in this room")
 		return
 	}
-	g.forwardOffer(w, r, rec, true, rec.UserID)
+	g.forwardOffer(w, r, rec, variant, true, rec.UserID)
 }
 
 // publishTokenValid reports whether the request carries the stream's
@@ -122,15 +138,26 @@ func publishTokenValid(r *http.Request, rec store.Stream) bool {
 }
 
 // Play serves POST /api/streams/{id}/whep for userID ("" when signed out).
+// With ?quality=low it plays the stream's low-quality version.
 func (g *Gateway) Play(w http.ResponseWriter, r *http.Request, userID string) {
 	ls, ok := g.Stream(r.PathValue("id"))
 	if !ok {
 		writeErr(w, http.StatusNotFound, "", errStreamGone.Error())
 		return
 	}
-	if g.allowWatch(w, r, ls.Stream, userID) {
-		g.forwardOffer(w, r, ls.Stream, false, userID)
+	variant, err := variantParam(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "", err.Error())
+		return
 	}
+	if !g.allowWatch(w, r, ls.Stream, userID) {
+		return
+	}
+	if variant == VariantLow && ls.Low == LowNone {
+		writeErr(w, http.StatusConflict, CodeLowQualityUnavailable, "this stream has no low-quality version right now")
+		return
+	}
+	g.forwardOffer(w, r, ls.Stream, variant, false, userID)
 }
 
 // allowWatch checks that userID may watch the stream, answering the
@@ -183,7 +210,7 @@ func playQuery(r *http.Request) (paused, noPreview bool, tab string, err error) 
 
 // forwardOffer relays a WHIP/WHEP offer to MediaMTX, records the session and
 // answers with a Location on this server. It reports whether it succeeded.
-func (g *Gateway) forwardOffer(w http.ResponseWriter, r *http.Request, rec store.Stream, publish bool, userID string) bool {
+func (g *Gateway) forwardOffer(w http.ResponseWriter, r *http.Request, rec store.Stream, variant Variant, publish bool, userID string) bool {
 	if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); mt != sdpType {
 		writeErr(w, http.StatusUnsupportedMediaType, "", "the offer must be "+sdpType)
 		return false
@@ -216,7 +243,7 @@ func (g *Gateway) forwardOffer(w http.ResponseWriter, r *http.Request, rec store
 			writeErr(w, http.StatusConflict, CodeTooManyStreams, errTooManyStreams.Error())
 			return false
 		}
-		if !p && !g.admit(rec.ID) {
+		if !p && !g.admit(rec.ID, variant) {
 			writeServerFull(w)
 			return false
 		}
@@ -242,11 +269,11 @@ func (g *Gateway) forwardOffer(w http.ResponseWriter, r *http.Request, rec store
 
 	header := http.Header{"Content-Type": {sdpType}, "X-Forwarded-For": {clientIP(r)}}
 	signal := func() (*http.Response, error) {
-		return g.mtx.Signal(r.Context(), http.MethodPost, mtxPath(rec.ID)+"/"+kind, query, header, strings.NewReader(offer))
+		return g.mtx.Signal(r.Context(), http.MethodPost, mtxPath(rec.ID, variant)+"/"+kind, query, header, strings.NewReader(offer))
 	}
 	var resp *http.Response
 	if publish {
-		resp, err = g.replacePublisher(r.Context(), rec.ID, signal)
+		resp, err = g.replacePublisher(r.Context(), rec.ID, variant, signal)
 	} else {
 		resp, err = signal()
 	}
@@ -278,11 +305,11 @@ func (g *Gateway) forwardOffer(w http.ResponseWriter, r *http.Request, rec store
 		return false
 	}
 
-	g.addSession(&session{mtxID: mtxID, secret: secret, streamID: rec.ID, publish: publish, userID: userID, tab: tab, created: g.now(), paused: paused})
+	g.addSession(&session{mtxID: mtxID, secret: secret, streamID: rec.ID, variant: variant, publish: publish, userID: userID, tab: tab, created: g.now(), paused: paused})
 
 	h := w.Header()
 	h.Set("Content-Type", sdpType)
-	h.Set("Location", sessionURL(r, rec.ID, kind, secret))
+	h.Set("Location", sessionURL(r, rec.ID, variant, kind, secret))
 	h.Set("Accept-Patch", trickleType)
 	if v := resp.Header.Get("ETag"); v != "" {
 		h.Set("ETag", v)
@@ -307,8 +334,8 @@ const publisherRetries = 10
 // connection died. MediaMTX refuses a second publisher (overridePublisher
 // is off, so nothing else can take over a path), so the old one is closed
 // first, and again if MediaMTX still reports it.
-func (g *Gateway) replacePublisher(ctx context.Context, streamID string, signal func() (*http.Response, error)) (*http.Response, error) {
-	g.closePublishers(ctx, streamID, nil)
+func (g *Gateway) replacePublisher(ctx context.Context, streamID string, variant Variant, signal func() (*http.Response, error)) (*http.Response, error) {
+	g.closePublishers(ctx, streamID, variant, nil)
 	for attempt := 1; ; attempt++ {
 		resp, err := signal()
 		if err != nil || resp.StatusCode != http.StatusBadRequest || attempt == publisherRetries {
@@ -327,7 +354,7 @@ func (g *Gateway) replacePublisher(ctx context.Context, streamID string, signal 
 		if err != nil {
 			return nil, err
 		}
-		g.closePublishers(ctx, streamID, mtxSessions)
+		g.closePublishers(ctx, streamID, variant, mtxSessions)
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -336,20 +363,20 @@ func (g *Gateway) replacePublisher(ctx context.Context, streamID string, signal 
 	}
 }
 
-// closePublishers closes the publishing sessions of a stream: the ones the
-// gateway knows and, when given, the ones in MediaMTX's list.
-func (g *Gateway) closePublishers(ctx context.Context, streamID string, listed []mediamtx.Session) {
+// closePublishers closes the publishing sessions of a stream's variant: the
+// ones the gateway knows and, when given, the ones in MediaMTX's list.
+func (g *Gateway) closePublishers(ctx context.Context, streamID string, variant Variant, listed []mediamtx.Session) {
 	ids := map[string]bool{}
 	g.mu.Lock()
 	for id, sess := range g.sessions {
-		if sess.streamID == streamID && sess.publish {
+		if sess.streamID == streamID && sess.variant == variant && sess.publish {
 			ids[id] = true
 			delete(g.sessions, id)
 		}
 	}
 	g.mu.Unlock()
 	for _, ms := range listed {
-		if ms.Path == mtxPath(streamID) && ms.State == "publish" {
+		if ms.Path == mtxPath(streamID, variant) && ms.State == "publish" {
 			ids[ms.ID] = true
 		}
 	}
@@ -372,13 +399,19 @@ func clientIP(r *http.Request) string {
 }
 
 // sessionURL is the absolute URL of a session resource on this server, built
-// from the request so it matches the host the client used.
-func sessionURL(r *http.Request, streamID, kind, secret string) string {
+// from the request so it matches the host the client used:
+// /api/media/{stream}/{kind}/{secret}, with the variant before the kind for
+// a low-quality version.
+func sessionURL(r *http.Request, streamID string, variant Variant, kind, secret string) string {
 	scheme := "http"
 	if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
 		scheme = "https"
 	}
-	return (&url.URL{Scheme: scheme, Host: r.Host, Path: "/api/media/" + streamID + "/" + kind + "/" + secret}).String()
+	p := "/api/media/" + streamID + "/"
+	if variant != VariantMain {
+		p += string(variant) + "/"
+	}
+	return (&url.URL{Scheme: scheme, Host: r.Host, Path: p + kind + "/" + secret}).String()
 }
 
 func relayMediaError(w http.ResponseWriter, status int, body []byte) {
@@ -395,13 +428,15 @@ func relayMediaError(w http.ResponseWriter, status int, body []byte) {
 	writeErr(w, status, "", msg)
 }
 
-// HandleSession serves PATCH and DELETE on /api/media/{stream}/{kind}/{secret}.
+// HandleSession serves PATCH and DELETE on /api/media/{stream}/{kind}/{secret}
+// and, for low-quality versions, /api/media/{stream}/{variant}/{kind}/{secret}.
 // The secret is a capability: only the client that created the session
 // knows it. Only trickle-ICE PATCHes pass; pausing and resuming are for
 // the server alone.
 func (g *Gateway) HandleSession(w http.ResponseWriter, r *http.Request) {
 	streamID, kind, secret := r.PathValue("stream"), r.PathValue("kind"), r.PathValue("secret")
-	if !reStreamID.MatchString(streamID) || (kind != "whip" && kind != "whep") || !reSecret.MatchString(secret) {
+	variant, ok := sessionVariant(r)
+	if !ok || !reStreamID.MatchString(streamID) || (kind != "whip" && kind != "whep") || !reSecret.MatchString(secret) {
 		writeErr(w, http.StatusNotFound, "", "no such session")
 		return
 	}
@@ -419,7 +454,7 @@ func (g *Gateway) HandleSession(w http.ResponseWriter, r *http.Request) {
 		body = io.LimitReader(r.Body, maxSDP)
 	}
 
-	resp, err := g.mtx.Signal(r.Context(), r.Method, mtxPath(streamID)+"/"+kind+"/"+secret, nil, header, body)
+	resp, err := g.mtx.Signal(r.Context(), r.Method, mtxPath(streamID, variant)+"/"+kind+"/"+secret, nil, header, body)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "", "the media server is unavailable")
 		return
@@ -428,9 +463,14 @@ func (g *Gateway) HandleSession(w http.ResponseWriter, r *http.Request) {
 	out, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 
 	if r.Method == http.MethodDelete && resp.StatusCode == http.StatusOK {
-		if kind == "whip" {
+		switch {
+		case kind == "whip" && variant == VariantMain:
 			g.EndStream(context.WithoutCancel(r.Context()), streamID, EndStopped)
-		} else {
+		case kind == "whip":
+			// The low-quality version ends alone; the stream goes on.
+			g.forgetSecret(secret)
+			g.lowEnded(streamID)
+		default:
 			g.forgetSecret(secret)
 		}
 	}

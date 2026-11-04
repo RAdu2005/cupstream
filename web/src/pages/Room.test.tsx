@@ -30,6 +30,7 @@ const stream: Stream = {
   viewers: 0,
   bitrate: 0,
   lossRatio: 0,
+  lowQuality: 'none',
 };
 
 /** The download test's answer: a few chunks of data. */
@@ -238,4 +239,28 @@ test('warns before opening a stream the connection may not carry', async () => {
   fireEvent.click(again.getByRole('button', { name: "Watch User 0's stream" }));
   await screen.findByRole('dialog', { name: 'Your connection may not keep up' });
   expect(fetchMock.mock.calls.filter(([url]) => url.startsWith('/api/bandwidth-test'))).toHaveLength(1);
+});
+
+test('streams with a low-quality version get a quality picker, remembered per browser', async () => {
+  localStorage.clear();
+  const streams = [
+    { ...stream, id: 's1', state: 'live' as const, lowQuality: 'sent' as const },
+    { ...stream, id: 's2', state: 'live' as const, user: bob },
+  ];
+  setup([json(200, { ...room, streams })]);
+  const cards = within(await screen.findByRole('region', { name: 'Live in this room' }));
+  fireEvent.click(cards.getByRole('button', { name: "Watch Alice's stream" }));
+  const picker = within(screen.getByRole('group', { name: "Alice's stream" })).getByRole('combobox', {
+    name: "Quality of Alice's stream",
+  });
+  expect(picker).toHaveValue('auto');
+  fireEvent.change(picker, { target: { value: 'low' } });
+  expect(picker).toHaveValue('low');
+  expect(localStorage.getItem('cupstream.quality')).toBe('low');
+
+  // Without a low-quality version there is nothing to pick.
+  fireEvent.click(cards.getByRole('button', { name: "Watch Bob's stream" }));
+  const bobs = within(await screen.findByRole('group', { name: "Bob's stream" }));
+  fireEvent.click(screen.getByRole('radio', { name: 'Grid' }));
+  expect(bobs.queryByRole('combobox')).not.toBeInTheDocument();
 });

@@ -51,7 +51,7 @@ On the server: install it as `/usr/local/bin/mediamtx`, with a system user `medi
 
 ## Configuration
 
-The server reads `CUPSTREAM_*` environment variables; see [.env.example](.env.example).
+The server reads `CUPSTREAM_*` environment variables; see [.env.example](.env.example). `CUPSTREAM_LOW_QUALITY=on|off` (default `on`) decides whether senders may publish [low-quality versions](docs/low-quality.md) of their streams and viewers are offered them.
 
 Requests are rate-limited per client address (behind the tunnel, the visitor's address from `CUPSTREAM_CLIENT_IP_HEADER`; for IPv6, per /64): signing in, going live, opening viewer sessions, opening the WebSocket and every other change through the API each have their own limit, and the limits are in `server/internal/httpapi/ratelimit.go`. Media session requests (`/api/media/...`) need the session's secret and are not limited. A refused request gets 429 with `Retry-After` and the code `rate_limited`. MediaMTX's HTTP API and WHIP/WHEP listener are bound to `127.0.0.1`: only the CupStream server talks to them, and media flows on port 8189 (UDP, with TCP fallback).
 
@@ -63,5 +63,6 @@ Requests are rate-limited per client address (behind the tunnel, the visitor's a
 - [Realtime](docs/realtime.md)
 - [Streaming locally](docs/streaming.md)
 - [Capacity](docs/capacity.md)
+- [Low-quality versions](docs/low-quality.md)
 - [Admins](docs/admin.md)
 - [MediaMTX build](docs/mediamtx.md)

@@ -14,12 +14,21 @@ export type Want = 'paused' | 'audio' | 'playing';
 
 export type SessionStatus = 'connecting' | 'ready' | 'error';
 
+/**
+ * A version of a stream: what the streamer sends, or its low-quality
+ * version for slow connections (sent by the desktop app, or transcoded by
+ * the server while someone watches it).
+ */
+export type Quality = 'source' | 'low';
+
 export type SessionView = {
   status: SessionStatus;
   /** The received tracks; null until the session is open. */
   media: MediaStream | null;
   /** The tracks the server holds back. */
   paused: Tracks;
+  /** The version the session plays. */
+  quality: Quality;
   error?: string;
   /** Machine-readable reason of the error, e.g. "too_many_streams". */
   code?: string;
@@ -32,10 +41,41 @@ function tracksFor(want: Want): Tracks {
   return want === 'playing' ? NONE : want === 'audio' ? { video: true, audio: false } : ALL;
 }
 
+/** How long a new version may take to show frames before it replaces the old one. */
+const SWITCH_WAIT_MS = 3000;
+
+/** Waits until the session's video receives media, for up to `ms`. */
+async function mediaArrives(stream: MediaStream, ms: number) {
+  const track = stream.getVideoTracks?.()[0];
+  if (!track?.muted) return;
+  await new Promise<void>((resolve) => {
+    const t = setTimeout(resolve, ms);
+    track.addEventListener(
+      'unmute',
+      () => {
+        clearTimeout(t);
+        resolve();
+      },
+      { once: true },
+    );
+  });
+}
+
 type Entry = {
   streamId: string;
+  /** The session shown, playing `quality`. */
   session: WhepSession | null;
+  quality: Quality;
   paused: Tracks;
+  /**
+   * While the low-quality version plays, the source's session stays open
+   * but paused, so that switching back only waits for a key frame.
+   */
+  spare: WhepSession | null;
+  /** The version the page asked for last. */
+  wished: Quality;
+  /** A version that could not be opened, not tried again until the wish or the stream's low version changes. */
+  refusedQuality: Quality | null;
   view: SessionView;
   busy: boolean;
   dirty: boolean;
@@ -52,6 +92,13 @@ type Entry = {
  * server one at a time per stream, and only the latest wish is applied, so
  * fast clicking does not queue requests.
  *
+ * A stream plays its source or its low-quality version. Switching opens the
+ * other version's session and swaps it in once its media arrives, so the
+ * picture goes on meanwhile. While the low version plays, the source's
+ * session stays open but paused, so switching back is quick. A transcoded
+ * low version costs the server while its session is open, even paused, so a
+ * paused stream goes back to its source.
+ *
  * Without pausing on the server (an older media server), paused streams get
  * no session and watching opens one.
  */
@@ -59,6 +106,7 @@ export class RoomSessions {
   private entries = new Map<string, Entry>();
   private streams = new Map<string, Stream>();
   private wants = new Map<string, Want>();
+  private qualities = new Map<string, Quality>();
   private listeners = new Set<() => void>();
   private snapshot: Record<string, SessionView> = {};
   private closed = false;
@@ -74,27 +122,35 @@ export class RoomSessions {
 
   getSnapshot = () => this.snapshot;
 
-  /** The peer connections of open sessions, for statistics. */
+  /** The peer connections of the sessions shown, for statistics. */
   peers(): Map<string, RTCPeerConnection> {
     const out = new Map<string, RTCPeerConnection>();
     for (const [id, e] of this.entries) if (e.session) out.set(id, e.session.peer);
     return out;
   }
 
-  /** Applies the room's streams and what the page wants from each. */
-  update(streams: Stream[], wants: Record<string, Want>) {
+  /**
+   * Applies the room's streams, what the page wants from each and which
+   * version (the source when not given).
+   */
+  update(streams: Stream[], wants: Record<string, Want>, qualities: Record<string, Quality> = {}) {
     if (this.closed) return;
     const prev = this.streams;
     this.streams = new Map(streams.map((s) => [s.id, s]));
     this.wants = new Map(Object.entries(wants));
+    this.qualities = new Map(Object.entries(qualities));
     for (const s of streams) {
       let e = this.entries.get(s.id);
       if (!e) {
         e = {
           streamId: s.id,
           session: null,
+          quality: 'source',
           paused: ALL,
-          view: { status: 'connecting', media: null, paused: ALL },
+          spare: null,
+          wished: 'source',
+          refusedQuality: null,
+          view: { status: 'connecting', media: null, paused: ALL, quality: 'source' },
           busy: false,
           dirty: false,
           failed: false,
@@ -104,6 +160,9 @@ export class RoomSessions {
       }
       // A stream that comes back after reconnecting gets a fresh try.
       if (s.state === 'live' && prev.get(s.id)?.state !== 'live') e.failed = false;
+      const wished = this.qualities.get(s.id) ?? 'source';
+      if (wished !== e.wished || s.lowQuality !== prev.get(s.id)?.lowQuality) e.refusedQuality = null;
+      e.wished = wished;
       this.kick(e);
     }
     for (const e of this.entries.values()) if (!this.streams.has(e.streamId)) this.kick(e);
@@ -121,7 +180,10 @@ export class RoomSessions {
   /** Closes every session (leaving the page). */
   close() {
     this.closed = true;
-    for (const e of this.entries.values()) void e.session?.close();
+    for (const e of this.entries.values()) {
+      void e.session?.close();
+      void e.spare?.close();
+    }
     this.entries.clear();
     this.listeners.clear();
   }
@@ -152,10 +214,49 @@ export class RoomSessions {
   }
 
   private async drop(e: Entry) {
-    const s = e.session;
+    const session = e.session;
+    const spare = e.spare;
     e.session = null;
+    e.spare = null;
     e.paused = ALL;
-    await s?.close();
+    await Promise.all([session?.close(), spare?.close()]);
+  }
+
+  /** The version a stream should play now. */
+  private qualityFor(e: Entry, stream: Stream, want: Want): Quality {
+    let q = e.wished;
+    // A paused transcode would keep running on the server for nothing.
+    if (stream.lowQuality === 'none' || (want === 'paused' && stream.lowQuality === 'transcoded')) q = 'source';
+    if (q === e.refusedQuality && e.session) return e.quality;
+    if (q === 'low' && e.refusedQuality === 'low') return 'source';
+    return q;
+  }
+
+  /** Opens a session of one version of a stream, paused or playing. */
+  private async openSession(e: Entry, quality: Quality, startPaused: boolean) {
+    const query = new URLSearchParams({ tab: realtime.tabId });
+    if (quality === 'low') query.set('quality', 'low');
+    if (startPaused) {
+      query.set('paused', 'true');
+      query.set('preview', 'false');
+    }
+    const session: WhepSession = await this.open(`/api/streams/${e.streamId}/whep?${query}`, (state) => {
+      if (state !== 'failed') return;
+      if (session === e.spare) {
+        e.spare = null;
+        void session.close();
+      } else if (session === e.session && e.quality === 'low') {
+        // The low version went away: back to the source.
+        e.refusedQuality = 'low';
+        void this.drop(e).then(() => this.kick(e));
+        this.setView(e, { status: 'connecting', media: null });
+      } else if (session === e.session) {
+        void this.drop(e);
+        e.failed = true;
+        this.setView(e, { status: 'error', media: null, error: 'The connection to the media server failed.' });
+      }
+    });
+    return session;
   }
 
   /** Brings one stream's session a step closer to what the page wants. */
@@ -176,26 +277,22 @@ export class RoomSessions {
       return;
     }
     if (e.failed) return;
+    const quality = this.qualityFor(e, stream, want);
 
     if (!e.session) {
       const startPaused = want !== 'playing' && this.pauseSupported;
-      const query = new URLSearchParams({ tab: realtime.tabId });
-      if (startPaused) {
-        query.set('paused', 'true');
-        query.set('preview', 'false');
-      }
       this.setView(e, { status: 'connecting', error: undefined, code: undefined });
       try {
-        e.session = await this.open(`/api/streams/${e.streamId}/whep?${query}`, (state) => {
-          if (state === 'failed' && e.session) {
-            void this.drop(e);
-            e.failed = true;
-            this.setView(e, { status: 'error', media: null, error: 'The connection to the media server failed.' });
-          }
-        });
+        e.session = await this.openSession(e, quality, startPaused);
       } catch (err) {
         if (err instanceof ApiError && err.code === 'pause_unsupported') {
           this.pauseSupported = false;
+          e.dirty = true;
+          return;
+        }
+        if (quality === 'low') {
+          // Play the source rather than nothing.
+          e.refusedQuality = 'low';
           e.dirty = true;
           return;
         }
@@ -207,9 +304,16 @@ export class RoomSessions {
         await this.drop(e);
         return;
       }
+      e.quality = quality;
       e.paused = startPaused ? ALL : NONE;
-      this.setView(e, { status: 'ready', media: e.session.stream, paused: e.paused });
+      this.setView(e, { status: 'ready', media: e.session.stream, paused: e.paused, quality });
       e.dirty = true; // the wish may have changed meanwhile
+      return;
+    }
+
+    if (quality !== e.quality) {
+      await this.switchTo(e, quality, want);
+      e.dirty = true;
       return;
     }
 
@@ -247,6 +351,62 @@ export class RoomSessions {
       return;
     }
     this.setView(e, { status: 'ready', paused: e.paused, error: undefined, code: undefined });
+  }
+
+  /**
+   * Replaces the session shown with one of the other version, which starts
+   * playing or paused as the page wants. The picture goes on until the new
+   * session receives media.
+   */
+  private async switchTo(e: Entry, quality: Quality, want: Want) {
+    const old = e.session!;
+    const startPaused = want !== 'playing' && this.pauseSupported;
+    let next: WhepSession | null = null;
+    let paused = startPaused ? ALL : NONE;
+    if (quality === 'source' && e.spare) {
+      // The source's paused session: resume what the page wants.
+      next = e.spare;
+      e.spare = null;
+      const target = tracksFor(want);
+      try {
+        if (!target.video || !target.audio)
+          await next.control('resume', { video: !target.video, audio: !target.audio });
+        paused = target;
+      } catch {
+        void next.close(); // closed by the server meanwhile: open another
+        next = null;
+        paused = startPaused ? ALL : NONE;
+      }
+    }
+    if (!next) {
+      try {
+        next = await this.openSession(e, quality, startPaused);
+      } catch (err) {
+        // Keep playing what plays, and say why when the source was refused.
+        e.refusedQuality = quality;
+        if (quality === 'source') this.fail(e, err);
+        return;
+      }
+    }
+    if (!startPaused) await mediaArrives(next.stream, SWITCH_WAIT_MS);
+    if (this.closed || !this.streams.has(e.streamId) || e.session !== old) {
+      await next.close();
+      return;
+    }
+    e.session = next;
+    e.quality = quality;
+    e.paused = paused;
+    this.setView(e, { status: 'ready', media: next.stream, paused, quality, error: undefined, code: undefined });
+    if (quality === 'low' && this.pauseSupported) {
+      try {
+        await old.control('pause', ALL);
+        e.spare = old;
+        return;
+      } catch {
+        // closed meanwhile
+      }
+    }
+    await old.close();
   }
 
   private fail(e: Entry, err: unknown) {

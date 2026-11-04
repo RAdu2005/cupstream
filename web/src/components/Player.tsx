@@ -2,6 +2,7 @@ import clsx from 'clsx';
 import { Loader2, Maximize, Minimize, Pause, Play, Volume2, VolumeX, X } from 'lucide-react';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { Stream } from '@/api/types.gen';
+import { hasLow, type QualityChoice } from '@/lib/quality';
 import type { SessionView } from '@/lib/roomSessions';
 
 type Props = {
@@ -16,6 +17,9 @@ type Props = {
   compact?: boolean;
   /** Shown over the video, e.g. a badge about the stream's quality. */
   badge?: ReactNode;
+  /** The viewer's quality choice; the picker shows when the stream has a low-quality version. */
+  quality: QualityChoice;
+  onQuality: (choice: QualityChoice) => void;
   onMute: (muted: boolean) => void;
   onVolume: (volume: number) => void;
   onPause: (paused: boolean) => void;
@@ -26,7 +30,7 @@ type Props = {
 };
 
 /** One watched stream: its video and controls. The session is opened by the room page. */
-export function Player({ stream, session, muted, volume, paused, compact, badge, ...on }: Props) {
+export function Player({ stream, session, muted, volume, paused, compact, badge, quality, ...on }: Props) {
   const box = useRef<HTMLDivElement>(null);
   const video = useRef<HTMLVideoElement>(null);
   const [frames, setFrames] = useState(false);
@@ -79,6 +83,7 @@ export function Player({ stream, session, muted, volume, paused, compact, badge,
   }
 
   const iconSize = compact ? 'size-3.5' : 'size-4';
+  const low = session?.quality === 'low';
   return (
     <div
       ref={box}
@@ -103,6 +108,14 @@ export function Player({ stream, session, muted, volume, paused, compact, badge,
         </div>
       )}
       {badge && <div className="absolute top-2 left-2">{badge}</div>}
+      {low && (
+        <span
+          className="absolute top-2 right-2 rounded bg-black/70 px-1.5 py-0.5 text-xs font-semibold"
+          title="Playing the low-quality version"
+        >
+          Low quality
+        </span>
+      )}
       {session?.error && session.status === 'ready' && (
         <p role="alert" className="absolute inset-x-2 top-2 rounded bg-black/70 px-2 py-1 text-xs">
           {session.error}
@@ -133,6 +146,19 @@ export function Player({ stream, session, muted, volume, paused, compact, badge,
           />
         )}
         <span className="flex-1 truncate px-1 text-xs font-semibold">{stream.user.displayName}</span>
+        {!compact && hasLow(stream) && (
+          <select
+            value={quality}
+            onChange={(e) => on.onQuality(e.target.value as QualityChoice)}
+            aria-label={`Quality of ${label}`}
+            title="Quality"
+            className="rounded bg-black/60 px-1 py-1 text-xs hover:bg-white/15"
+          >
+            <option value="auto">{quality === 'auto' && low ? 'Auto (low)' : 'Auto'}</option>
+            <option value="source">Source</option>
+            <option value="low">Low</option>
+          </select>
+        )}
         {!compact && (
           <Control label={fullscreen ? 'Exit fullscreen' : 'Fullscreen'} onClick={toggleFullscreen}>
             {fullscreen ? <Minimize className={iconSize} /> : <Maximize className={iconSize} />}

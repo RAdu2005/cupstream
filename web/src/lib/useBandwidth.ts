@@ -44,6 +44,7 @@ export function useBandwidth(slug: string, sessions: RoomSessions | null, playin
     const ids = key.split(',');
     const prev = new Map<string, Counters>();
     const history = new Map<string, boolean[]>();
+    const peerOf = new Map<string, RTCPeerConnection>();
     let stopped = false;
 
     const tick = async () => {
@@ -52,6 +53,13 @@ export function useBandwidth(slug: string, sessions: RoomSessions | null, playin
       for (const id of ids) {
         const pc = peers.get(id);
         if (!pc) continue;
+        if (peerOf.get(id) !== pc) {
+          // Another session, e.g. after switching to the low-quality
+          // version: its counters and health start over.
+          peerOf.set(id, pc);
+          prev.delete(id);
+          history.delete(id);
+        }
         let cur: Counters;
         try {
           cur = countersOf((await pc.getStats()).values(), performance.now());

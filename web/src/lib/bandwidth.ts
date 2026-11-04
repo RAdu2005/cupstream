@@ -13,6 +13,11 @@ export const STATS_INTERVAL_MS = 2000;
 /** A stream is struggling when this many of its last samples were bad. */
 const BAD_SAMPLES = 2;
 const HISTORY = 3;
+/**
+ * Above this share of lost packets between a sender and the server, a
+ * struggling stream is blamed on its sender's connection.
+ */
+export const SENDER_LOSS = 0.02;
 /** Warn before opening a stream when the total would pass this share of the capacity. */
 export const CAPACITY_SHARE = 0.8;
 

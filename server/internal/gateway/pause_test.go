@@ -35,7 +35,11 @@ func (f *fixture) play(t *testing.T, st Started, userID, query string, want int)
 	}
 	parts := strings.Split(rec.Header().Get("Location"), "/")
 	secret := parts[len(parts)-1]
-	for _, s := range f.mtx.Sessions("s/" + st.Stream.ID) {
+	path := "s/" + st.Stream.ID
+	if strings.Contains(query, "quality=low") {
+		path += "/low"
+	}
+	for _, s := range f.mtx.Sessions(path) {
 		if s.Secret == secret {
 			return viewerSession{secret: secret, mtxID: s.ID}
 		}

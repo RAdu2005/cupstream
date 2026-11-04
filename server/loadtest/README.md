@@ -20,6 +20,7 @@ The MediaMTX API port is 9997 plus the dev server's port offset (8084: 10001).
 What it does:
 
 - **Publishers** (`-streams`) sign in with the development login as `loadtest_pub_<n>`, open their room to everyone, start a web stream and send a ten-second clip of moving noise over WHIP in a loop. The clip is H.264 Constrained Baseline with no B-frames and a keyframe every 2 s, at `-bitrate`, `-size` and `-fps`. Like a browser, a publisher answers keyframe requests by jumping to the next keyframe. `-watch <id,...>` watches existing streams instead, e.g. from OBS.
+- **Low-quality versions** (`-low-bitrate`, in kbit/s, with `-low-size` and `-low-fps`): each publisher also publishes a [low-quality version](../../docs/low-quality.md) of its stream, like the desktop app, and `-low-viewers` (0–1) is the share of viewers that watch it.
 - **Viewers** (`-viewers`, opened at `-ramp` per second and spread over the streams) open WHEP sessions signed out, like visitors. They don't decode: they count bytes, lost packets (sequence gaps) and the time to the first keyframe. With `-prewarm`, they open paused without a preview frame and resume a second later. Each viewer's UDP socket gets a 4 MiB receive buffer (`-rcvbuf`, capped by `net.core.rmem_max`). With the default 208 KiB, keyframes that reach every viewer at once overflow the harness's own sockets.
 - **Every second**, it prints:
   - viewers playing, starting, refused (503, admission control), rate-limited (429) and failed

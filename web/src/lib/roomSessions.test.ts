@@ -5,7 +5,7 @@ import { RoomSessions, type Want } from './roomSessions';
 import type { Tracks, WhepSession } from './whep';
 
 const alice = { id: 'u1', handle: 'alice', displayName: 'Alice' };
-const stream = (id: string, state: Stream['state'] = 'live'): Stream => ({
+const stream = (id: string, state: Stream['state'] = 'live', lowQuality: Stream['lowQuality'] = 'none'): Stream => ({
   id,
   user: alice,
   source: 'obs',
@@ -14,6 +14,7 @@ const stream = (id: string, state: Stream['state'] = 'live'): Stream => ({
   viewers: 0,
   bitrate: 0,
   lossRatio: 0,
+  lowQuality,
 });
 
 type Call = { url?: string; action?: string; tracks?: Tracks; closed?: string };
@@ -30,7 +31,7 @@ function fakeServer() {
       throw err;
     }
     calls.push({ url });
-    const id = /streams\/(\w+)\//.exec(url)![1];
+    const id = /streams\/(\w+)\//.exec(url)![1] + (url.includes('quality=low') ? ' low' : '');
     const session: WhepSession = {
       stream: {} as MediaStream,
       peer: {} as RTCPeerConnection,
@@ -171,4 +172,93 @@ test('a failed open waits for a retry', async () => {
   s.retry('a');
   await settle();
   expect(s.getSnapshot().a!.status).toBe('ready');
+});
+
+const path = (c: Call) => {
+  const u = new URL(c.url!, 'http://x');
+  return `${u.pathname}?quality=${u.searchParams.get('quality') ?? ''}&paused=${u.searchParams.get('paused') ?? ''}`;
+};
+
+test('switches to the low-quality version and back, keeping the source pre-warmed', async () => {
+  const srv = fakeServer();
+  const s = new RoomSessions(srv.open);
+  const a = stream('a', 'live', 'sent');
+  s.update([a], { a: 'playing' });
+  await settle();
+  srv.calls.length = 0;
+
+  s.update([a], { a: 'playing' }, { a: 'low' });
+  await settle();
+  // The low version opens playing; the source is paused, not closed.
+  expect(path(srv.calls[0]!)).toBe('/api/streams/a/whep?quality=low&paused=');
+  expect(srv.calls.slice(1)).toEqual([{ action: 'a pause', tracks: { video: true, audio: true } }]);
+  expect(s.getSnapshot().a!).toMatchObject({ status: 'ready', quality: 'low', paused: { video: false, audio: false } });
+
+  // Pausing the tile pauses the low version.
+  srv.calls.length = 0;
+  s.update([a], { a: 'paused' }, { a: 'low' });
+  await settle();
+  expect(srv.calls).toEqual([{ action: 'a low pause', tracks: { video: true, audio: true } }]);
+
+  // Back to the source: its session resumes, the low one closes.
+  srv.calls.length = 0;
+  s.update([a], { a: 'playing' }, { a: 'source' });
+  await settle();
+  expect(srv.calls).toEqual([{ action: 'a resume', tracks: { video: true, audio: true } }, { closed: 'a low' }]);
+  expect(srv.open).toHaveBeenCalledTimes(2);
+  expect(s.getSnapshot().a!).toMatchObject({ quality: 'source', paused: { video: false, audio: false } });
+});
+
+test('plays the source when the low-quality version is missing or refused', async () => {
+  const srv = fakeServer();
+  const s = new RoomSessions(srv.open);
+  // No low version: the wish is ignored.
+  s.update([stream('a')], { a: 'playing' }, { a: 'low' });
+  await settle();
+  expect(srv.calls.map(path)).toEqual(['/api/streams/a/whep?quality=&paused=']);
+
+  // Refused when it is opened: the source plays instead, without asking again.
+  const b = stream('b', 'live', 'sent');
+  srv.calls.length = 0;
+  srv.failNextOpen(new ApiError(409, 'no low-quality version', 'low_quality_unavailable'));
+  s.update([stream('a'), b], { a: 'playing', b: 'playing' }, { a: 'low', b: 'low' });
+  await settle();
+  expect(srv.calls.map(path)).toEqual(['/api/streams/b/whep?quality=&paused=']);
+  expect(s.getSnapshot().b!).toMatchObject({ status: 'ready', quality: 'source' });
+  srv.calls.length = 0;
+  s.update([stream('a'), b], { a: 'playing', b: 'playing' }, { a: 'low', b: 'low' });
+  await settle();
+  expect(srv.calls).toEqual([]);
+});
+
+test('goes back to the source when the low-quality version ends', async () => {
+  const srv = fakeServer();
+  const s = new RoomSessions(srv.open);
+  s.update([stream('a', 'live', 'sent')], { a: 'playing' }, { a: 'low' });
+  await settle();
+  expect(s.getSnapshot().a!.quality).toBe('low');
+  srv.calls.length = 0;
+  s.update([stream('a', 'live', 'none')], { a: 'playing' }, { a: 'low' });
+  await settle();
+  expect(srv.calls.map((c) => (c.url ? path(c) : c))).toEqual([
+    '/api/streams/a/whep?quality=&paused=',
+    { closed: 'a low' },
+  ]);
+  expect(s.getSnapshot().a!.quality).toBe('source');
+});
+
+test('a paused stream does not keep a transcode running', async () => {
+  const srv = fakeServer();
+  const s = new RoomSessions(srv.open);
+  const a = stream('a', 'live', 'transcoded');
+  s.update([a], { a: 'playing' });
+  await settle();
+  s.update([a], { a: 'playing' }, { a: 'low' });
+  await settle();
+  srv.calls.length = 0;
+  s.update([a], { a: 'paused' }, { a: 'low' });
+  await settle();
+  // The pre-warmed source takes over, still paused; the transcode's session closes.
+  expect(srv.calls).toEqual([{ closed: 'a low' }]);
+  expect(s.getSnapshot().a!).toMatchObject({ quality: 'source', paused: { video: true, audio: true } });
 });

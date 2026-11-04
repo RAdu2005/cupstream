@@ -100,6 +100,8 @@ func run() error {
 			gw.Admission = meter
 		}
 	}
+	gw.LowEnabled = cfg.LowQuality
+	slog.Info("low-quality versions", "accepted", cfg.LowQuality)
 	hub := realtime.New(db, roomService, gw, cfg)
 	gw.OnRoomIdle = hub.RoomIdle
 	go func() {

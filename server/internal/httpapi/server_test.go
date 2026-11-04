@@ -46,6 +46,8 @@ type envOptions struct {
 	bot            *fakeBot
 	// admins is CUPSTREAM_ADMINS, e.g. "dev:root".
 	admins []string
+	// lowQuality is CUPSTREAM_LOW_QUALITY.
+	lowQuality bool
 }
 
 func newTestEnv(t *testing.T, o envOptions) *testEnv {
@@ -93,6 +95,7 @@ func newTestEnv(t *testing.T, o envOptions) *testEnv {
 		deps.Bot = o.bot
 	}
 	e.gw = gateway.New(db, media, rs, cfg.PublicURL)
+	e.gw.LowEnabled = o.lowQuality
 	deps.Gateway = e.gw
 	e.hub = realtime.New(db, rs, e.gw, cfg)
 	e.hub.TabGrace = 50 * time.Millisecond

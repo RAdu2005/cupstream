@@ -3,6 +3,7 @@
 package view
 
 import (
+	"cmp"
 	"context"
 	"time"
 
@@ -44,6 +45,8 @@ func Stream(ctx context.Context, users *Users, ls gateway.LiveStream) (api.Strea
 		Bitrate: ls.Stats.Bitrate, LossRatio: ls.Stats.LossRatio,
 		KeyFrameInterval: ls.Stats.KeyFrameInterval.Seconds(),
 		ThumbnailAt:      unixMilli(ls.ThumbnailAt),
+		LowQuality:       string(cmp.Or(ls.Low, gateway.LowNone)),
+		LowBitrate:       ls.LowBitrate,
 	}, err
 }
 

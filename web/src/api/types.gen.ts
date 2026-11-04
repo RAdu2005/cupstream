@@ -760,6 +760,17 @@ export interface Stream {
    * GET /api/streams/{id}/thumbnail; app and web senders upload it.
    */
   thumbnailAt?: number /* int64 */;
+  /**
+   * LowQuality says what a viewer gets if they pick the low-quality
+   * version (POST /api/streams/{id}/whep?quality=low): none, one the
+   * sender publishes, or one the server transcodes while someone watches.
+   */
+  lowQuality: 'none' | 'sent' | 'transcoded';
+  /**
+   * LowBitrate is what the server receives of a sent low-quality
+   * version, in bits per second, when known.
+   */
+  lowBitrate?: number /* int64 */;
 }
 /**
  * PauseTracks is the optional body of POST /api/media/{stream}/whep/{secret}/pause
@@ -796,6 +807,16 @@ export interface StartStreamResponse {
   roomSlug: string;
   whipUrl: string;
   token: string;
+  lowQuality: LowQualityOffer;
+}
+/**
+ * LowQualityOffer tells a sender whether to publish a low-quality version.
+ * When Publish is set, the server accepts one at WhipURL + "?quality=low",
+ * with the same token, once the stream itself is being published; it ends
+ * with the stream, and can end alone.
+ */
+export interface LowQualityOffer {
+  publish: boolean;
 }
 
 //////////
