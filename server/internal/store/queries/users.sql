@@ -5,7 +5,33 @@ SELECT * FROM users WHERE id = ?;
 SELECT * FROM users WHERE handle = ?;
 
 -- name: HandleTaken :one
-SELECT EXISTS (SELECT 1 FROM users WHERE handle = ?);
+-- Whether handle belongs to someone other than user_id ('' for a new user):
+-- their handle, a room's slug, or a handle they gave up since `since`, which
+-- stays reserved to them.
+SELECT EXISTS (
+    SELECT 1 FROM users WHERE users.handle = sqlc.arg(handle) AND users.id != sqlc.arg(user_id)
+    UNION ALL
+    SELECT 1 FROM rooms
+    WHERE rooms.slug = sqlc.arg(handle) AND (rooms.owner_id IS NULL OR rooms.owner_id != sqlc.arg(user_id))
+    UNION ALL
+    SELECT 1 FROM handle_changes
+    WHERE handle_changes.old_handle = sqlc.arg(handle) AND handle_changes.user_id != sqlc.arg(user_id)
+      AND handle_changes.changed_at > sqlc.arg(since) AND handle_changes.undone_at IS NULL
+);
+
+-- name: LastHandleChange :one
+-- The user's latest handle change that was not undone.
+SELECT * FROM handle_changes
+WHERE user_id = ? AND undone_at IS NULL
+ORDER BY changed_at DESC, id DESC
+LIMIT 1;
+
+-- name: CreateHandleChange :exec
+INSERT INTO handle_changes (user_id, old_handle, new_handle, changed_at)
+VALUES (?, ?, ?, ?);
+
+-- name: UndoHandleChange :exec
+UPDATE handle_changes SET undone_at = ? WHERE id = ?;
 
 -- name: GetUserByIdentity :one
 SELECT users.*

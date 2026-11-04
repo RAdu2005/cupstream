@@ -36,7 +36,7 @@ func newFixture(t *testing.T) *fixture {
 	t.Cleanup(func() { db.Close() })
 	f := &fixture{db: db, mtx: mtxtest.New(t), clock: time.Unix(1_800_000_000, 0)}
 	f.gw = f.newGateway()
-	f.user, _, err = auth.NewAccounts(db, nil).SignIn(ctx, oauth.Identity{Provider: "dev", Subject: "alice", Username: "alice"})
+	f.user, err = auth.NewAccounts(db, nil).SignUp(ctx, oauth.Identity{Provider: "dev", Subject: "alice", Username: "alice"}, "alice", "alice")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +168,7 @@ func TestRestoreAfterRestart(t *testing.T) {
 	f.reconcile(t)
 
 	// A second stream by another user whose publisher is gone during the restart.
-	bob, _, _ := auth.NewAccounts(f.db, nil).SignIn(context.Background(), oauth.Identity{Provider: "dev", Subject: "bob", Username: "bob"})
+	bob, _ := auth.NewAccounts(f.db, nil).SignUp(context.Background(), oauth.Identity{Provider: "dev", Subject: "bob", Username: "bob"}, "bob", "bob")
 	gone, _ := f.gw.Start(context.Background(), StartRequest{User: bob, Source: SourceWeb, LinkFallback: true})
 
 	f.gw = f.newGateway() // restart: in-memory state is lost

@@ -283,6 +283,49 @@ func TestRealtimeRename(t *testing.T) {
 	}
 }
 
+// The handle names its owner's link room: when it changes, the room's
+// subscribers follow it to its new slug without subscribing again.
+func TestRealtimeRoomRenamed(t *testing.T) {
+	e := newTestEnv(t, envOptions{devLogin: true})
+	alice, bob := e.browser(t), e.browser(t)
+	alice.devLogin("alice")
+	bob.devLogin("bob")
+	if slug := alice.roomSlug(); slug != "alice" {
+		t.Fatalf("alice's room is %q", slug)
+	}
+	alice.json("PATCH", "/api/rooms/alice", api.UpdateRoomRequest{Visibility: "signed_in"}, nil, 200)
+	bs := bob.connect("bob-tab-1")
+	bs.subscribe("alice")
+
+	alice.json("PATCH", "/api/account", api.UpdateProfileRequest{Handle: "alicia", DisplayName: "Alice"}, nil, 200)
+	if ev := next[api.RoomRenamed](bs, "roomRenamed"); ev.Room != "alice" || ev.Slug != "alicia" {
+		t.Fatalf("roomRenamed = %+v", ev)
+	}
+	alice.json("GET", "/api/rooms/alicia", nil, nil, 200)
+	alice.json("GET", "/api/rooms/alice", nil, nil, http.StatusNotFound)
+	bs.send(api.ClientMessage{Type: "chat", Room: "alicia", Body: "hi"})
+	if m := next[api.ChatEvent](bs, "chat"); m.Room != "alicia" || m.Message.Body != "hi" {
+		t.Fatalf("chat after the room was renamed: %+v", m)
+	}
+
+	// A second change within the week is refused; switching back is not.
+	var refusal api.ErrorResponse
+	alice.json("PATCH", "/api/account", api.UpdateProfileRequest{Handle: "ally", DisplayName: "Alice"}, &refusal, http.StatusConflict)
+	if refusal.Code != "handle_cooldown" {
+		t.Fatalf("second change: %+v", refusal)
+	}
+	bob.json("PATCH", "/api/account", api.UpdateProfileRequest{Handle: "alice", DisplayName: "Bob"}, nil, http.StatusConflict)
+	var acc api.Account
+	alice.json("GET", "/api/account", nil, &acc, 200)
+	if acc.Handle.Previous != "alice" || acc.Handle.PreviousUntil == 0 || acc.Handle.NextChangeAt == 0 {
+		t.Fatalf("handle rules = %+v", acc.Handle)
+	}
+	alice.json("PATCH", "/api/account", api.UpdateProfileRequest{Handle: "alice", DisplayName: "Alice"}, nil, 200)
+	if ev := next[api.RoomRenamed](bs, "roomRenamed"); ev.Room != "alicia" || ev.Slug != "alice" {
+		t.Fatalf("roomRenamed = %+v", ev)
+	}
+}
+
 func TestRealtimeChat(t *testing.T) {
 	e := newTestEnv(t, envOptions{devLogin: true})
 	alice, bob, anon := e.browser(t), e.browser(t), e.browser(t)

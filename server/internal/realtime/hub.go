@@ -531,6 +531,26 @@ func (h *Hub) UserChanged(u api.User) {
 	}
 }
 
+// RoomRenamed moves room's subscriptions from its old slug to its new one
+// (its owner changed their handle) and tells the subscribers, who follow
+// it. The friends of its streamers fetch their friends' streams again, which
+// name the room.
+func (h *Hub) RoomRenamed(ctx context.Context, room store.Room, old string) {
+	h.mu.Lock()
+	if rs := h.subs[room.ID]; rs != nil {
+		rs.room = room
+		for c := range rs.conns {
+			if c.subs[old] == rs {
+				delete(c.subs, old)
+				c.subs[room.Slug] = rs
+			}
+			c.send(api.RoomRenamed{Type: "roomRenamed", Room: old, Slug: room.Slug})
+		}
+	}
+	h.mu.Unlock()
+	h.friendRoomChanged(ctx, room)
+}
+
 // StreamMoved tells the subscribers of from that a stream moved to another
 // room (slug to).
 func (h *Hub) StreamMoved(from store.Room, streamID, to string) {

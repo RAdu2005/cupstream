@@ -10,6 +10,28 @@ import (
 	"database/sql"
 )
 
+const createHandleChange = `-- name: CreateHandleChange :exec
+INSERT INTO handle_changes (user_id, old_handle, new_handle, changed_at)
+VALUES (?, ?, ?, ?)
+`
+
+type CreateHandleChangeParams struct {
+	UserID    string
+	OldHandle string
+	NewHandle string
+	ChangedAt int64
+}
+
+func (q *Queries) CreateHandleChange(ctx context.Context, arg CreateHandleChangeParams) error {
+	_, err := q.db.ExecContext(ctx, createHandleChange,
+		arg.UserID,
+		arg.OldHandle,
+		arg.NewHandle,
+		arg.ChangedAt,
+	)
+	return err
+}
+
 const createIdentity = `-- name: CreateIdentity :exec
 INSERT INTO identities (provider, subject, user_id, username, created_at)
 VALUES (?, ?, ?, ?, ?)
@@ -199,14 +221,54 @@ func (q *Queries) GetUserSettings(ctx context.Context, userID string) (UserSetti
 }
 
 const handleTaken = `-- name: HandleTaken :one
-SELECT EXISTS (SELECT 1 FROM users WHERE handle = ?)
+SELECT EXISTS (
+    SELECT 1 FROM users WHERE users.handle = ?1 AND users.id != ?2
+    UNION ALL
+    SELECT 1 FROM rooms
+    WHERE rooms.slug = ?1 AND (rooms.owner_id IS NULL OR rooms.owner_id != ?2)
+    UNION ALL
+    SELECT 1 FROM handle_changes
+    WHERE handle_changes.old_handle = ?1 AND handle_changes.user_id != ?2
+      AND handle_changes.changed_at > ?3 AND handle_changes.undone_at IS NULL
+)
 `
 
-func (q *Queries) HandleTaken(ctx context.Context, handle string) (bool, error) {
-	row := q.db.QueryRowContext(ctx, handleTaken, handle)
+type HandleTakenParams struct {
+	Handle string
+	UserID string
+	Since  int64
+}
+
+// Whether handle belongs to someone other than user_id (” for a new user):
+// their handle, a room's slug, or a handle they gave up since `since`, which
+// stays reserved to them.
+func (q *Queries) HandleTaken(ctx context.Context, arg HandleTakenParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, handleTaken, arg.Handle, arg.UserID, arg.Since)
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const lastHandleChange = `-- name: LastHandleChange :one
+SELECT id, user_id, old_handle, new_handle, changed_at, undone_at FROM handle_changes
+WHERE user_id = ? AND undone_at IS NULL
+ORDER BY changed_at DESC, id DESC
+LIMIT 1
+`
+
+// The user's latest handle change that was not undone.
+func (q *Queries) LastHandleChange(ctx context.Context, userID string) (HandleChange, error) {
+	row := q.db.QueryRowContext(ctx, lastHandleChange, userID)
+	var i HandleChange
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.OldHandle,
+		&i.NewHandle,
+		&i.ChangedAt,
+		&i.UndoneAt,
+	)
+	return i, err
 }
 
 const listBannedUsers = `-- name: ListBannedUsers :many
@@ -316,6 +378,20 @@ type SetUserBannedParams struct {
 
 func (q *Queries) SetUserBanned(ctx context.Context, arg SetUserBannedParams) error {
 	_, err := q.db.ExecContext(ctx, setUserBanned, arg.BannedAt, arg.ID)
+	return err
+}
+
+const undoHandleChange = `-- name: UndoHandleChange :exec
+UPDATE handle_changes SET undone_at = ? WHERE id = ?
+`
+
+type UndoHandleChangeParams struct {
+	UndoneAt sql.NullInt64
+	ID       int64
+}
+
+func (q *Queries) UndoHandleChange(ctx context.Context, arg UndoHandleChangeParams) error {
+	_, err := q.db.ExecContext(ctx, undoHandleChange, arg.UndoneAt, arg.ID)
 	return err
 }
 

@@ -146,14 +146,29 @@ func TestOAuthSignInLinkAndMerge(t *testing.T) {
 		t.Fatalf("providers = %v", providers.Providers)
 	}
 
-	// Ana signs up with Discord; her server list is synced.
-	if to := ana.oauth("discord", "login", "111"); to != "/" {
+	// Ana signs in with Discord for the first time: she chooses her handle,
+	// suggested from her Discord username. Her server list is synced.
+	if to := ana.oauth("discord", "login", "111"); to != "/signup?next=%2F" {
 		t.Fatalf("redirect to %q", to)
 	}
+	ana.json("GET", "/api/me", nil, nil, http.StatusUnauthorized)
+	var signUp api.PendingSignUp
+	ana.json("GET", "/api/auth/signup", nil, &signUp, 200)
+	if signUp.Provider != "discord" || signUp.Username != "d_111" || signUp.DisplayName != "Discord 111" || signUp.Handle != "d_111" {
+		t.Fatalf("pending sign-up = %+v", signUp)
+	}
+	var check api.HandleCheck
+	ana.json("GET", "/api/auth/handle?handle=Ana", nil, &check, 200)
+	if !check.Available {
+		t.Fatalf("handle check = %+v", check)
+	}
+	ana.json("POST", "/api/auth/signup", api.SignUpRequest{Handle: "a b", DisplayName: "Ana"}, nil, http.StatusBadRequest)
+	ana.json("POST", "/api/auth/signup", api.SignUpRequest{Handle: "Ana", DisplayName: "Ana"}, nil, 200)
+	ana.json("POST", "/api/auth/signup", api.SignUpRequest{Handle: "ana2", DisplayName: "Ana"}, nil, http.StatusNotFound) // done
 	var acc api.Account
 	ana.json("GET", "/api/account", nil, &acc, 200)
-	if acc.User.Handle != "d_111" || acc.User.DisplayName != "Discord 111" || !strings.Contains(acc.User.AvatarURL, "/avatars/111/abc") {
-		t.Fatalf("account = %+v", acc.User)
+	if acc.User.Handle != "ana" || acc.User.DisplayName != "Ana" || acc.RoomSlug != "ana" || !strings.Contains(acc.User.AvatarURL, "/avatars/111/abc") {
+		t.Fatalf("account = %+v", acc)
 	}
 	var guilds []api.Guild
 	ana.json("GET", "/api/account/guilds", nil, &guilds, 200)
@@ -179,6 +194,12 @@ func TestOAuthSignInLinkAndMerge(t *testing.T) {
 
 	// Mara has a separate account through Google; Ana links it: merge.
 	mara.oauth("google", "login", "g-mara")
+	mara.json("GET", "/api/auth/handle?handle=ANA", nil, &check, 200)
+	if check.Available || check.Error == "" {
+		t.Fatalf("handle check of a taken handle = %+v", check)
+	}
+	mara.json("POST", "/api/auth/signup", api.SignUpRequest{Handle: "ana", DisplayName: "Mara"}, nil, http.StatusConflict)
+	mara.json("POST", "/api/auth/signup", api.SignUpRequest{Handle: "mara", DisplayName: "Mara"}, nil, 200)
 	var maraMe api.Me
 	mara.json("GET", "/api/me", nil, &maraMe, 200)
 	ana.json("DELETE", "/api/account/identities/google", nil, nil, http.StatusNoContent)

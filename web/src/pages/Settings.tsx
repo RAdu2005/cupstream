@@ -15,7 +15,7 @@ import {
   useUpdateProfile,
   useUpdateSettings,
 } from '@/api/account';
-import { useAuthProviders, useMe } from '@/api/auth';
+import { useAuthProviders, useHandleCheck, useMe } from '@/api/auth';
 import { useAllowed, useBans, useRemoveAllowed, useRoom, useSetAllowed, useUnban, useUpdateRoom } from '@/api/rooms';
 import type { Account, AuthProvider, Visibility } from '@/api/types.gen';
 import { AllowFriends } from '@/components/AllowFriends';
@@ -78,6 +78,11 @@ function Profile({ account }: { account: Account }) {
   const [name, setName] = useState(account.user.displayName);
   const update = useUpdateProfile();
   const dirty = handle !== account.user.handle || name !== account.user.displayName;
+  const rules = account.handle;
+  const changing = handle.trim() !== account.user.handle;
+  const check = useHandleCheck(handle, !changing);
+  // Within the week only switching back to the previous handle is allowed.
+  const locked = !!rules.nextChangeAt && handle.trim() !== rules.previous;
 
   function submit(e: FormEvent) {
     e.preventDefault();
@@ -91,12 +96,42 @@ function Profile({ account }: { account: Account }) {
           <span className="text-sm font-medium">Display name</span>
           <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={48} />
         </label>
-        <label className="space-y-1.5">
-          <span className="text-sm font-medium">Handle</span>
-          <Input value={handle} onChange={(e) => setHandle(e.target.value.toLowerCase())} maxLength={32} />
-        </label>
+        <div className="space-y-1.5">
+          <label className="block space-y-1.5">
+            <span className="text-sm font-medium">Handle</span>
+            <Input value={handle} onChange={(e) => setHandle(e.target.value.toLowerCase())} maxLength={32} />
+          </label>
+          <p className={`text-xs ${changing && check?.error ? 'text-danger' : 'text-muted'}`}>
+            {changing && check?.error
+              ? check.error
+              : `Your room: ${window.location.host}/r/${handle.trim() || '…'}`}
+          </p>
+        </div>
+        <div className="space-y-1 text-xs text-muted sm:col-span-2">
+          <p>
+            Your handle is your room's link: changing it changes the link, and the old one stops working. You can
+            change it once a week.
+          </p>
+          {rules.nextChangeAt && (
+            <p>You can change your handle again on {new Date(rules.nextChangeAt * 1000).toLocaleString()}.</p>
+          )}
+          {rules.previous && rules.previousUntil && (
+            <p>
+              @{rules.previous} stays yours until {new Date(rules.previousUntil * 1000).toLocaleString()}; switching back
+              to it before then undoes the change.{' '}
+              {handle !== rules.previous && (
+                <button type="button" className="text-accent hover:underline" onClick={() => setHandle(rules.previous!)}>
+                  Switch back
+                </button>
+              )}
+            </p>
+          )}
+        </div>
         <div className="flex items-center gap-3 sm:col-span-2">
-          <Button type="submit" disabled={!dirty || update.isPending}>
+          <Button
+            type="submit"
+            disabled={!dirty || update.isPending || (changing && (locked || check?.available === false))}
+          >
             Save
           </Button>
           {update.error && <span className="text-sm text-danger">{update.error.message}</span>}

@@ -252,6 +252,20 @@ func (q *Queries) MoveAllowed(ctx context.Context, arg MoveAllowedParams) error 
 	return err
 }
 
+const setLinkRoomSlug = `-- name: SetLinkRoomSlug :exec
+UPDATE rooms SET slug = ? WHERE kind = 'link' AND owner_id = ?
+`
+
+type SetLinkRoomSlugParams struct {
+	Slug    string
+	OwnerID sql.NullString
+}
+
+func (q *Queries) SetLinkRoomSlug(ctx context.Context, arg SetLinkRoomSlugParams) error {
+	_, err := q.db.ExecContext(ctx, setLinkRoomSlug, arg.Slug, arg.OwnerID)
+	return err
+}
+
 const setRoomVisibility = `-- name: SetRoomVisibility :exec
 UPDATE rooms SET visibility = ? WHERE id = ? AND kind = 'link'
 `

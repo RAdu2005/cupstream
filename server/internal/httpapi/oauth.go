@@ -169,7 +169,11 @@ func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if flow.Mode == modeLogin {
-		user, _, err := s.Accounts.SignIn(r.Context(), id)
+		user, err := s.Accounts.SignIn(r.Context(), id)
+		if errors.Is(err, auth.ErrNoAccount) {
+			s.startSignUp(w, r, id, flow.Next)
+			return
+		}
 		if err == nil {
 			err = s.switchSession(w, r, user.ID)
 		}

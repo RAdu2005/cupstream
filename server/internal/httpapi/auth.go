@@ -37,8 +37,8 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// devLogin signs in as any handle without a password, creating the user on
-// first use. It exists for local development and end-to-end tests, and is
+// devLogin signs in as any handle without a password, creating the user
+// with that handle on first use. It exists for local development and end-to-end tests, and is
 // only registered when CUPSTREAM_DEV_LOGIN is set; it also refuses requests
 // that are not addressed to and coming from this machine.
 func (s *Server) devLogin(w http.ResponseWriter, r *http.Request) {
@@ -61,11 +61,17 @@ func (s *Server) devLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, _, err := s.Accounts.SignIn(r.Context(), oauth.Identity{
-		Provider: auth.ProviderDev, Subject: handle, Username: handle, DisplayName: handle,
-	})
-	if errors.Is(err, auth.ErrBanned) {
+	id := oauth.Identity{Provider: auth.ProviderDev, Subject: handle, Username: handle, DisplayName: handle}
+	user, err := s.Accounts.SignIn(r.Context(), id)
+	if errors.Is(err, auth.ErrNoAccount) {
+		user, err = s.Accounts.SignUp(r.Context(), id, handle, handle)
+	}
+	switch {
+	case errors.Is(err, auth.ErrBanned):
 		writeErrorCode(w, http.StatusForbidden, "banned", err.Error())
+		return
+	case errors.Is(err, auth.ErrHandleTaken):
+		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
 	if err == nil {

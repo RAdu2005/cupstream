@@ -10,6 +10,7 @@ import { Login } from './pages/Login';
 import { NotFound } from './pages/NotFound';
 import { Room } from './pages/Room';
 import { Settings } from './pages/Settings';
+import { SignUp } from './pages/SignUp';
 
 export const routes: RouteObject[] = [
   {
@@ -17,6 +18,7 @@ export const routes: RouteObject[] = [
     children: [
       { index: true, element: <Home /> },
       { path: 'login', element: <Login /> },
+      { path: 'signup', element: <SignUp /> },
       { path: 'app/authorize', element: <AppAuthorize /> },
       { path: 'settings', element: <Settings /> },
       { path: 'friends', element: <Friends /> },

@@ -53,6 +53,15 @@ type Friendship struct {
 	AcceptedAt  sql.NullInt64
 }
 
+type HandleChange struct {
+	ID        int64
+	UserID    string
+	OldHandle string
+	NewHandle string
+	ChangedAt int64
+	UndoneAt  sql.NullInt64
+}
+
 type Identity struct {
 	Provider  string
 	Subject   string

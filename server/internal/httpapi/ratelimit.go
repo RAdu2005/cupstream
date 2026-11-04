@@ -14,7 +14,8 @@ import (
 // one home connection share them, so they are generous: they stop scripts,
 // not people.
 const (
-	// Signing in: OAuth start and callback, and the development login.
+	// Signing in: OAuth start and callback, signing up and the development
+	// login.
 	signInBurst  = 20
 	signInRefill = 3 * time.Second
 	// Going live: POST /api/streams, and WHIP from OBS and the apps.
@@ -49,7 +50,7 @@ func rateLimits(enabled bool, now func() time.Time, next http.Handler) http.Hand
 		}
 	}
 	kind(ratelimit.New(signInBurst, signInRefill),
-		"GET /api/auth/{provider}/start", "GET /api/auth/{provider}/callback", "POST /api/auth/dev/login")
+		"GET /api/auth/{provider}/start", "GET /api/auth/{provider}/callback", "POST /api/auth/signup", "POST /api/auth/dev/login")
 	kind(ratelimit.New(publishBurst, publishRefill),
 		"POST /api/streams", "POST /whip", "POST /api/streams/{id}/whip")
 	kind(ratelimit.New(playBurst, playRefill), "POST /api/streams/{id}/whep")

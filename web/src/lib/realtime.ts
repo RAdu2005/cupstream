@@ -9,6 +9,7 @@ import type {
   RealtimeError,
   Refused,
   RoomChanged,
+  RoomRenamed,
   StreamEnded,
   StreamEvent,
   StreamGrace,
@@ -21,6 +22,7 @@ export type ServerMessage =
   | Subscribed
   | Refused
   | RoomChanged
+  | RoomRenamed
   | PresenceEvent
   | StreamEvent
   | StreamEnded
@@ -80,11 +82,21 @@ export class RealtimeClient {
     this.connect();
     return () => {
       set.delete(listener);
-      if (set.size === 0 && this.rooms.get(room) === set) {
-        this.rooms.delete(room);
-        this.send({ type: 'unsubscribe', room });
+      // The room may have been renamed since (roomRenamed).
+      const current = [...this.rooms].find(([, s]) => s === set)?.[0];
+      if (set.size === 0 && current !== undefined) {
+        this.rooms.delete(current);
+        this.send({ type: 'unsubscribe', room: current });
       }
     };
+  }
+
+  /** Moves a room's listeners to its new slug; the server moved the subscription. */
+  private rename(from: string, to: string) {
+    const set = this.rooms.get(from);
+    if (!set || this.rooms.has(to)) return;
+    this.rooms.delete(from);
+    this.rooms.set(to, set);
   }
 
   /**
@@ -157,7 +169,8 @@ export class RealtimeClient {
       } catch {
         return;
       }
-      const room = 'room' in msg ? msg.room : undefined;
+      if (msg.type === 'roomRenamed') this.rename(msg.room, msg.slug);
+      const room = msg.type === 'roomRenamed' ? msg.slug : 'room' in msg ? msg.room : undefined;
       const targets = room ? [this.rooms.get(room)] : [...this.rooms.values(), this.listeners];
       for (const set of targets) for (const fn of set ?? []) fn(msg);
     };

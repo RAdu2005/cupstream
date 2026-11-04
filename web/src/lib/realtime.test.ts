@@ -46,6 +46,27 @@ test('unsubscribes when the last listener leaves', () => {
   rt.reset();
 });
 
+test('follows a renamed room to its new slug', () => {
+  const rt = new RealtimeClient();
+  const got: ServerMessage[] = [];
+  const stop = rt.subscribe('alice', (m) => got.push(m));
+  const ws = FakeWebSocket.last;
+  ws.open();
+
+  ws.receive({ type: 'roomRenamed', room: 'alice', slug: 'alicia' });
+  ws.receive({ type: 'roomChanged', room: 'alicia' });
+  expect(got).toEqual([
+    { type: 'roomRenamed', room: 'alice', slug: 'alicia' },
+    { type: 'roomChanged', room: 'alicia' },
+  ]);
+  stop();
+  expect(ws.sent).toEqual([
+    { type: 'subscribe', room: 'alice' },
+    { type: 'unsubscribe', room: 'alicia' },
+  ]);
+  rt.reset();
+});
+
 test('reconnects with backoff and subscribes again', () => {
   vi.useFakeTimers();
   const rt = new RealtimeClient();
