@@ -11,7 +11,7 @@ const presets: [Settings['preset'], string][] = [
   ['source', 'Source size, 60 fps'],
 ];
 
-const select = 'h-9 w-full rounded-md border border-line bg-bg px-2 text-sm focus:border-accent focus:outline-none';
+const select = 'h-9 w-full rounded-md border border-line bg-bg pr-8 pl-2 text-sm focus:border-accent focus:outline-none';
 
 export function SettingsView({ status, onBack }: { status: Status; onBack: () => void }) {
   const [settings, setSettings] = useState<Settings | null>(null);
