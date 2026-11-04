@@ -23,10 +23,10 @@ type AdminStream struct {
 func (g *Gateway) AllStreams() []AdminStream {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	counts := g.viewerCountsLocked()
+	t := g.tallyLocked()
 	var live []LiveStream
 	for id, s := range g.streams {
-		live = append(live, g.snapshotLocked(id, s, counts))
+		live = append(live, g.snapshotLocked(id, s, t))
 	}
 	slicesSortByStart(live)
 	out := make([]AdminStream, len(live))

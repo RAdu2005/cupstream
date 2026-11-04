@@ -8,6 +8,8 @@ The server reads the build's version from MediaMTX at startup, and again wheneve
 
 Viewers pause and resume their own sessions with `POST /api/media/{stream}/whep/{secret}/pause` and `.../resume` (optional body `{"video": bool, "audio": bool}`), and open pre-warmed sessions with `POST /api/streams/{id}/whep?paused=true&preview=false`. A room holds up to 8 streams and a viewer receives up to 4 at once (a signed-in user across their tabs; paused sessions do not count); beyond that the server answers 409 with `room_full` or `too_many_streams`. A viewer who loses access is held: their media is paused, they cannot resume it, it comes back if they regain access, and the session is closed after 2 minutes.
 
+On-demand transcodes (see [Low-quality versions](low-quality.md#transcodes)) run FFmpeg from MediaMTX, which therefore also listens for RTSP on `127.0.0.1:8554` (TCP only): FFmpeg reads streams and publishes their transcodes there. The development image includes FFmpeg; in production it is installed on the host, and FFmpeg 6 or later with libx264 and Opus works.
+
 On the host, raise the UDP send buffer limit to match MediaMTX's `udpWriteBufferSize` (8 MiB), or Linux silently caps it:
 
 ```sh

@@ -53,6 +53,10 @@ type Config struct {
 	// LowQuality accepts low-quality versions of streams from senders and
 	// offers them to viewers (CUPSTREAM_LOW_QUALITY=on|off, on by default).
 	LowQuality bool
+	// Transcodes is how many low-quality versions the server may transcode
+	// with FFmpeg at once, for streams without one from their sender
+	// (CUPSTREAM_TRANSCODES; 0, the default, makes none).
+	Transcodes int
 
 	// DevLogin enables the passwordless development login. It is refused
 	// unless PublicURL is a local development host.
@@ -156,6 +160,13 @@ func load(getenv func(string) string) (*Config, error) {
 			errs = append(errs, fmt.Errorf("CUPSTREAM_EGRESS_LIMIT_MBPS: %q is not a number of megabits per second", raw))
 		}
 		c.EgressLimit = int64(mbps * 1e6)
+	}
+	if raw := get("TRANSCODES", "0"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 {
+			errs = append(errs, fmt.Errorf("CUPSTREAM_TRANSCODES: %q is not a number of transcodes (0: none)", raw))
+		}
+		c.Transcodes = n
 	}
 	for name := range strings.SplitSeq(get("EGRESS_INTERFACE", ""), ",") {
 		if name = strings.TrimSpace(name); name != "" {

@@ -11,7 +11,9 @@ import (
 // desktop app publishes one as a second WHIP session on the stream's low
 // path, s/<streamId>/low. It belongs to the stream: it cannot be published
 // without the stream's own publisher, it ends with the stream, and it can
-// end alone without ending the stream. Viewers pick it with ?quality=low.
+// end alone without ending the stream. For streams without one, the server
+// can transcode one while someone watches it (transcode.go). Viewers pick
+// either with ?quality=low.
 
 // Variant is a version of a stream, with a MediaMTX path of its own.
 type Variant string
@@ -22,14 +24,18 @@ const (
 	// VariantLow is the low-quality version the sender publishes:
 	// s/<streamId>/low.
 	VariantLow Variant = "low"
+	// VariantTranscode is the low-quality version the server transcodes
+	// with FFmpeg while someone watches it: s/<streamId>/transcode.
+	VariantTranscode Variant = "transcode"
 )
 
 // LowQuality says what a viewer who picks the low-quality version gets.
 type LowQuality string
 
 const (
-	LowNone LowQuality = "none" // no low-quality version
-	LowSent LowQuality = "sent" // the sender publishes one
+	LowNone       LowQuality = "none"       // no low-quality version
+	LowSent       LowQuality = "sent"       // the sender publishes one
+	LowTranscoded LowQuality = "transcoded" // the server transcodes one on demand
 )
 
 // LowDefaultBitrate is assumed for a low-quality version whose bitrate is
@@ -66,7 +72,7 @@ func parsePath(p string) (streamID string, v Variant, ok bool) {
 	if !hasSuffix {
 		return streamID, VariantMain, true
 	}
-	if v = Variant(suffix); v != VariantLow {
+	if v = Variant(suffix); v != VariantLow && v != VariantTranscode {
 		return "", "", false
 	}
 	return streamID, v, true
@@ -87,31 +93,25 @@ func variantParam(r *http.Request) (Variant, error) {
 // sessionVariant reads the variant from a session URL, /api/media/{stream}[/{variant}]/...
 func sessionVariant(r *http.Request) (Variant, bool) {
 	switch v := Variant(r.PathValue("variant")); v {
-	case VariantMain, VariantLow:
+	case VariantMain, VariantLow, VariantTranscode:
 		return v, true
 	}
 	return "", false
 }
 
 // lowQualityLocked says what the stream's viewers get if they pick the
-// low-quality version.
-func (g *Gateway) lowQualityLocked(s *liveStream) LowQuality {
-	if g.LowEnabled && s.lowOnline {
+// low-quality version: the sender's, or else a transcode if one may run.
+// running is transcodingLocked's result.
+func (g *Gateway) lowQualityLocked(id string, s *liveStream, running map[string]bool) LowQuality {
+	switch {
+	case !g.LowEnabled:
+		return LowNone
+	case s.lowOnline:
 		return LowSent
+	case g.canTranscodeLocked(id, s, running):
+		return LowTranscoded
 	}
 	return LowNone
-}
-
-// LowQualityOf returns what the stream's viewers get if they pick the
-// low-quality version.
-func (g *Gateway) LowQualityOf(streamID string) LowQuality {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	s, ok := g.streams[streamID]
-	if !ok {
-		return LowNone
-	}
-	return g.lowQualityLocked(s)
 }
 
 // hasPublisher reports whether the gateway knows a publishing session of

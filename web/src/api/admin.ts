@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMe } from './auth';
 import { api, ApiError } from './client';
-import type { AdminOverview, Me } from './types.gen';
+import type { AdminOverview, Me, SetTranscodesRequest } from './types.gen';
 
 const overviewKey = ['admin'] as const;
 
@@ -34,6 +34,13 @@ function useAdminAction<T>(fn: (arg: T) => Promise<void>) {
 
 export function useAdminEndStream() {
   return useAdminAction((id: string) => api<void>(`/api/admin/streams/${id}/end`, { method: 'POST' }));
+}
+
+/** Changes how many transcodes may run at once, until the server restarts. */
+export function useSetTranscodes() {
+  return useAdminAction((max: number) =>
+    api<void>('/api/admin/transcodes', { method: 'PUT', body: JSON.stringify({ max } satisfies SetTranscodesRequest) }),
+  );
 }
 
 export function useBan() {

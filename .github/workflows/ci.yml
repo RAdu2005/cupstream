@@ -57,7 +57,7 @@ jobs:
             -d '{"handle":"ci"}' http://localhost:8080/api/auth/dev/login
           curl -sf -b cookies.txt http://localhost:8080/api/me | grep -q '"handle":"ci"'
           # MediaMTX's HTTP listeners (API, WHIP/WHEP) must be bound to localhost only.
-          for port in 9997 8889; do
+          for port in 9997 8889 8554; do
             listeners=$(ss -Hltn "sport = :$port" | awk '{print $4}')
             echo "port $port: $listeners"
             if [ -z "$listeners" ] || echo "$listeners" | grep -qv '^127\.0\.0\.1:'; then

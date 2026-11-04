@@ -118,3 +118,23 @@ func TestPlatformBan(t *testing.T) {
 		t.Fatalf("banned after lifting carol's ban: %+v", o.Banned)
 	}
 }
+
+func TestAdminTranscodeLimit(t *testing.T) {
+	e := newTestEnv(t, envOptions{devLogin: true, admins: []string{"dev:root"}})
+	e.gw.SetMaxTranscodes(2)
+	root, bob := e.browser(t), e.browser(t)
+	root.devLogin("root")
+	bob.devLogin("bob")
+
+	var o api.AdminOverview
+	root.json("GET", "/api/admin", nil, &o, 200)
+	if o.Transcodes != (api.Transcodes{Running: 0, Max: 2}) {
+		t.Fatalf("transcodes = %+v", o.Transcodes)
+	}
+	bob.json("PUT", "/api/admin/transcodes", api.SetTranscodesRequest{Max: 9}, nil, http.StatusForbidden)
+	root.json("PUT", "/api/admin/transcodes", api.SetTranscodesRequest{Max: -1}, nil, http.StatusBadRequest)
+	root.json("PUT", "/api/admin/transcodes", api.SetTranscodesRequest{Max: 0}, nil, 200)
+	if u := e.gw.Transcodes(); u.Max != 0 {
+		t.Fatalf("after the override: %+v", u)
+	}
+}

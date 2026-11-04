@@ -11,7 +11,8 @@ RUN go generate ./... && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /mediamtx .
 
 FROM alpine:3.24
-RUN apk add --no-cache ca-certificates
+# FFmpeg makes on-demand low-quality versions (runOnDemand in mediamtx.yml).
+RUN apk add --no-cache ca-certificates ffmpeg
 COPY --from=build /mediamtx /usr/local/bin/mediamtx
 COPY mediamtx.yml /etc/mediamtx/mediamtx.yml
 ENTRYPOINT ["/usr/local/bin/mediamtx"]

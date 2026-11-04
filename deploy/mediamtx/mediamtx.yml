@@ -58,8 +58,11 @@ webrtcAllowPausePatch: false
 # (background tiles, pre-warmed streams) may last longer.
 webrtcPausedTimeout: 30m
 
-# CupStream is WebRTC-only.
-rtsp: false
+# Viewers and senders use WebRTC only. RTSP is for FFmpeg on this machine,
+# which reads streams and publishes their transcodes (see paths below).
+rtsp: true
+rtspTransports: [tcp]
+rtspAddress: 127.0.0.1:8554
 rtmp: false
 hls: false
 srt: false
@@ -69,7 +72,33 @@ metrics: false
 pprof: false
 
 paths:
-  # Stream paths (s/<streamId>) are created by publishing to them.
+  # Low-quality versions the CupStream server transcodes on demand
+  # (docs/low-quality.md): while someone reads s/<streamId>/transcode, FFmpeg
+  # reads the stream and publishes a copy of at most 720p30, H.264 without
+  # B-frames at 1.2 Mbit/s, with the stream's Opus audio. MediaMTX stops it
+  # 10 seconds after its last reader left, and kills it if it ignores that
+  # for 10 seconds more. The server caps how many run (CUPSTREAM_TRANSCODES),
+  # and asks for none while that is 0, so this does nothing without FFmpeg.
+  # Each transcode is limited to 2 threads for decoding and 2 for encoding.
+  "~^s/([a-z2-7]{16})/transcode$":
+    runOnDemand: >-
+      ffmpeg -hide_banner -loglevel warning -nostdin
+      -fflags nobuffer -analyzeduration 500000 -threads 2
+      -rtsp_transport tcp -i rtsp://127.0.0.1:$RTSP_PORT/s/$G1
+      -map 0:v:0 -map 0:a:0?
+      -vf "scale=-2:'min(720,ih)',fps=30"
+      -c:v libx264 -preset veryfast -tune zerolatency -profile:v baseline -bf 0 -g 30
+      -b:v 1200k -maxrate 1200k -bufsize 1200k -pix_fmt yuv420p -threads 2
+      -c:a copy
+      -f rtsp -rtsp_transport tcp -pkt_size 1200 rtsp://127.0.0.1:$RTSP_PORT/$MTX_PATH
+    runOnDemandRestart: true
+    # Within the CupStream server's 10-second timeout for MediaMTX.
+    runOnDemandStartTimeout: 8s
+    runOnDemandCloseAfter: 10s
+    overridePublisher: false
+    maxReaders: 150
+  # Stream paths (s/<streamId>, and s/<streamId>/low for a low-quality
+  # version from the sender) are created by publishing to them.
   all_others:
     # A second publisher is refused instead of replacing the first; the
     # CupStream server closes the old one itself when a sender reconnects.

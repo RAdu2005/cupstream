@@ -22,7 +22,7 @@ func TestDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Addr != ":8080" || c.DevLogin || c.NoRateLimits || !c.LowQuality || c.EgressLimit != 800_000_000 || c.EgressInterfaces != nil || c.SecureCookies() || c.MediaMTXAPI.String() != "http://127.0.0.1:9997" {
+	if c.Addr != ":8080" || c.DevLogin || c.NoRateLimits || !c.LowQuality || c.Transcodes != 0 || c.EgressLimit != 800_000_000 || c.EgressInterfaces != nil || c.SecureCookies() || c.MediaMTXAPI.String() != "http://127.0.0.1:9997" {
 		t.Fatalf("unexpected defaults: %+v", c)
 	}
 }
@@ -41,6 +41,8 @@ func TestErrors(t *testing.T) {
 		"bad egress limit":         {"CUPSTREAM_EGRESS_LIMIT_MBPS": "-1"},
 		"admin without provider":   {"CUPSTREAM_ADMINS": "discord:1,12345"},
 		"bad low quality switch":   {"CUPSTREAM_LOW_QUALITY": "maybe"},
+		"negative transcodes":      {"CUPSTREAM_TRANSCODES": "-1"},
+		"bad transcodes":           {"CUPSTREAM_TRANSCODES": "many"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := load(env(vars)); err == nil {

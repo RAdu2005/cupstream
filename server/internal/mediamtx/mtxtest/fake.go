@@ -42,6 +42,10 @@ type Fake struct {
 	URL *url.URL
 	// Version is reported by /v3/info; it decides the features CupStream uses.
 	Version string
+	// OnDemand, when set, says which paths have a runOnDemand command:
+	// reading one starts a publisher on it (not a WebRTC session), until
+	// StopOnDemand. Set it before use.
+	OnDemand func(path string) bool
 
 	mu        sync.Mutex
 	sessions  map[string]*Session // by ID
@@ -49,6 +53,7 @@ type Fake struct {
 	calls     []Call
 	keyFrames map[string]float64 // key frame interval by path
 	subs      map[chan string]struct{}
+	demanded  map[string]bool // paths whose runOnDemand command runs
 }
 
 func New(t *testing.T) *Fake {
@@ -57,6 +62,7 @@ func New(t *testing.T) *Fake {
 		sessions:  map[string]*Session{},
 		keyFrames: map[string]float64{},
 		subs:      map[chan string]struct{}{},
+		demanded:  map[string]bool{},
 	}
 	f.Server = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(func() {
@@ -171,6 +177,10 @@ func (f *Fake) signal(w http.ResponseWriter, r *http.Request) {
 	if len(parts) == 3 && r.Method == http.MethodPost {
 		body, _ := io.ReadAll(r.Body)
 		s := &Session{ID: uuid.NewString(), Secret: uuid.NewString(), Path: path, State: "read", Query: r.URL.RawQuery, Offer: string(body)}
+		if kind == "whep" && !f.onlinePathsLocked()[path] && f.OnDemand != nil && f.OnDemand(path) {
+			f.demanded[path] = true
+			f.emitLocked("stream.online", map[string]any{"path": path})
+		}
 		if kind == "whip" {
 			s.State = "publish"
 			// Like MediaMTX with overridePublisher off.
@@ -246,8 +256,28 @@ func (f *Fake) closeLocked(s *Session) {
 	}
 }
 
+// StopOnDemand stops a path's runOnDemand command, as MediaMTX does a while
+// after its last reader left; its readers are closed.
+func (f *Fake) StopOnDemand(path string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.demanded[path] {
+		return
+	}
+	delete(f.demanded, path)
+	f.emitLocked("stream.offline", map[string]any{"path": path})
+	for _, o := range f.sessions {
+		if o.Path == path {
+			f.closeLocked(o)
+		}
+	}
+}
+
 func (f *Fake) onlinePathsLocked() map[string]bool {
 	online := map[string]bool{}
+	for p := range f.demanded {
+		online[p] = true
+	}
 	for _, s := range f.sessions {
 		if s.State == "publish" {
 			online[s.Path] = true

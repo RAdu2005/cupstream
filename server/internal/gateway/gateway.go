@@ -2,7 +2,8 @@
 // request passes through it to MediaMTX, which listens on localhost only.
 //
 // The gateway decides access, gives each stream its own MediaMTX path
-// (s/<streamId>, and s/<streamId>/low for its low-quality version) and
+// (s/<streamId>, s/<streamId>/low for a low-quality version its sender
+// publishes and s/<streamId>/transcode for one the server transcodes) and
 // records every session so it can pause or end it when access changes. It follows MediaMTX's event stream for live state,
 // re-synchronizing with one list call after each (re)connection, and polls
 // every two seconds when the event stream is unavailable.
@@ -106,6 +107,10 @@ type liveStream struct {
 	// and what it receives from it.
 	lowOnline bool
 	lowStats  streamStats
+	// The server's transcode (transcode.go): whether MediaMTX reports its
+	// path online, and when a viewer was last admitted to it.
+	transcodeOnline   bool
+	transcodeReserved time.Time
 }
 
 type session struct {
@@ -125,6 +130,8 @@ type session struct {
 	heldAt time.Time
 	stats  sessionStats
 	report viewerReport // what the viewer's browser measured
+	// Viewers of a transcode: since when they receive nothing.
+	idleSince time.Time
 }
 
 // watching reports whether a viewer receives media: not held, and not
@@ -190,6 +197,10 @@ type Gateway struct {
 	// LowEnabled accepts low-quality versions from senders and offers them
 	// to viewers (CUPSTREAM_LOW_QUALITY; see low.go). Set it before serving.
 	LowEnabled bool
+	// maxTranscodes is how many on-demand transcodes may run at once
+	// (CUPSTREAM_TRANSCODES, or an admin's override; see transcode.go):
+	// none until SetMaxTranscodes.
+	maxTranscodes int
 }
 
 func New(db *store.DB, mtx *mediamtx.Client, rs *rooms.Service, publicURL *url.URL) *Gateway {
@@ -394,6 +405,7 @@ func (g *Gateway) Reconcile(ctx context.Context) error {
 	for id, s := range g.streams {
 		g.setOnlineLocked(s, online[mtxPath(id, VariantMain)], now)
 		g.setLowOnlineLocked(s, online[mtxPath(id, VariantLow)])
+		g.setTranscodeOnlineLocked(s, online[mtxPath(id, VariantTranscode)])
 	}
 
 	present := map[string]bool{}
@@ -449,9 +461,12 @@ func (g *Gateway) HandleEvent(ctx context.Context, e mediamtx.Event) {
 		if !ok || s == nil {
 			break
 		}
-		if up := e.Type == mediamtx.EventStreamOnline; variant == VariantLow {
+		switch up := e.Type == mediamtx.EventStreamOnline; variant {
+		case VariantLow:
 			g.setLowOnlineLocked(s, up)
-		} else {
+		case VariantTranscode:
+			g.setTranscodeOnlineLocked(s, up)
+		default:
 			g.setOnlineLocked(s, up, now)
 		}
 	case mediamtx.EventSessionCreated:
@@ -523,6 +538,7 @@ func (g *Gateway) expire(ctx context.Context) {
 			delete(g.early, id)
 		}
 	}
+	kicks = append(kicks, g.idleTranscodeViewersLocked(now)...)
 	g.mu.Unlock()
 
 	kicks = append(kicks, g.heldTooLong(ctx, held)...)
@@ -786,10 +802,20 @@ func (g *Gateway) CloseViewerSessions(ctx context.Context, roomID, userID string
 	return len(ids)
 }
 
-func (g *Gateway) snapshotLocked(id string, s *liveStream, counts map[string]int) LiveStream {
+// tally is what snapshots of several streams need from all sessions.
+type tally struct {
+	viewers     map[string]int  // watching viewers by stream ID
+	transcoding map[string]bool // streams whose transcode runs
+}
+
+func (g *Gateway) tallyLocked() tally {
+	return tally{g.viewerCountsLocked(), g.transcodingLocked(g.now())}
+}
+
+func (g *Gateway) snapshotLocked(id string, s *liveStream, t tally) LiveStream {
 	ls := LiveStream{
-		Stream: s.rec, State: s.state, Viewers: counts[id], Stats: s.stats.public(),
-		Low: g.lowQualityLocked(s), LowBitrate: s.lowStats.pub.Bitrate,
+		Stream: s.rec, State: s.state, Viewers: t.viewers[id], Stats: s.stats.public(),
+		Low: g.lowQualityLocked(id, s, t.transcoding), LowBitrate: s.lowStats.pub.Bitrate,
 	}
 	if s.thumb != nil {
 		ls.ThumbnailAt = s.thumb.At
@@ -801,11 +827,11 @@ func (g *Gateway) snapshotLocked(id string, s *liveStream, counts map[string]int
 func (g *Gateway) RoomStreams(roomID string) []LiveStream {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	counts := g.viewerCountsLocked()
+	t := g.tallyLocked()
 	var out []LiveStream
 	for id, s := range g.streams {
 		if s.rec.RoomID == roomID {
-			out = append(out, g.snapshotLocked(id, s, counts))
+			out = append(out, g.snapshotLocked(id, s, t))
 		}
 	}
 	slicesSortByStart(out)
@@ -816,10 +842,10 @@ func (g *Gateway) RoomStreams(roomID string) []LiveStream {
 func (g *Gateway) ActiveStreams() []LiveStream {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	counts := g.viewerCountsLocked()
+	t := g.tallyLocked()
 	out := make([]LiveStream, 0, len(g.streams))
 	for id, s := range g.streams {
-		out = append(out, g.snapshotLocked(id, s, counts))
+		out = append(out, g.snapshotLocked(id, s, t))
 	}
 	slicesSortByStart(out)
 	return out
@@ -833,7 +859,7 @@ func (g *Gateway) Stream(streamID string) (LiveStream, bool) {
 	if !ok {
 		return LiveStream{}, false
 	}
-	return g.snapshotLocked(streamID, s, g.viewerCountsLocked()), true
+	return g.snapshotLocked(streamID, s, g.tallyLocked()), true
 }
 
 // MoveStream moves a live stream into another room. Its media path stays

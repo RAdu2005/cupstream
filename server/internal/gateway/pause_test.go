@@ -16,7 +16,7 @@ import (
 )
 
 type viewerSession struct {
-	secret, mtxID string
+	secret, mtxID, location string
 }
 
 // play opens a viewer session through the gateway; query is e.g. "paused=true".
@@ -35,13 +35,13 @@ func (f *fixture) play(t *testing.T, st Started, userID, query string, want int)
 	}
 	parts := strings.Split(rec.Header().Get("Location"), "/")
 	secret := parts[len(parts)-1]
-	path := "s/" + st.Stream.ID
+	sessions := f.mtx.Sessions("s/" + st.Stream.ID)
 	if strings.Contains(query, "quality=low") {
-		path += "/low"
+		sessions = append(f.mtx.Sessions("s/"+st.Stream.ID+"/low"), f.mtx.Sessions("s/"+st.Stream.ID+"/transcode")...)
 	}
-	for _, s := range f.mtx.Sessions(path) {
+	for _, s := range sessions {
 		if s.Secret == secret {
-			return viewerSession{secret: secret, mtxID: s.ID}
+			return viewerSession{secret: secret, mtxID: s.ID, location: rec.Header().Get("Location")}
 		}
 	}
 	t.Fatal("MediaMTX has no such session")

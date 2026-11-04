@@ -40,6 +40,7 @@ type options struct {
 	width     int
 	height    int
 	fps       int
+	noise     int // strength of the noise over the test picture (0-100)
 
 	// The low-quality version each publisher also sends (lowBitrate 0:
 	// none), and the share of viewers that watch it.
@@ -69,6 +70,7 @@ func main() {
 	kbps := flag.Int("bitrate", 8000, "bitrate of each synthetic stream, kbit/s")
 	size := flag.String("size", "1920x1080", "picture size of the synthetic streams")
 	flag.IntVar(&o.fps, "fps", 60, "frame rate of the synthetic streams")
+	flag.IntVar(&o.noise, "noise", 30, "noise over the synthetic streams' moving picture, 0-100: 30 is about the hardest to compress, 0 is closer to a screen")
 	lowKbps := flag.Int("low-bitrate", 0, "also publish a low-quality version of each synthetic stream at this many kbit/s (0: none)")
 	lowSize := flag.String("low-size", "1280x720", "picture size of the low-quality versions")
 	flag.IntVar(&o.lowFPS, "low-fps", 30, "frame rate of the low-quality versions")
@@ -139,7 +141,7 @@ func run(ctx context.Context, o options) error {
 		}
 		log.Printf("clip: %d frames, %.1f Mbit/s", len(clip.frames), float64(clip.bitrate())/1e6)
 		if o.lowBitrate > 0 {
-			if low, err = encodeClipAt(ctx, o.lowWidth, o.lowHeight, o.lowFPS, o.lowBitrate); err != nil {
+			if low, err = encodeClipAt(ctx, o.lowWidth, o.lowHeight, o.lowFPS, o.lowBitrate, o.noise); err != nil {
 				return err
 			}
 			log.Printf("low-quality clip: %d frames, %.1f Mbit/s", len(low.frames), float64(low.bitrate())/1e6)

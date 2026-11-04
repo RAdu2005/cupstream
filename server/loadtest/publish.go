@@ -48,18 +48,18 @@ func (c *clip) bitrate() int {
 // Baseline, no B-frames, a keyframe every two seconds. It is cached in the
 // temporary directory.
 func encodeClip(ctx context.Context, o options) (*clip, error) {
-	return encodeClipAt(ctx, o.width, o.height, o.fps, o.bitrate)
+	return encodeClipAt(ctx, o.width, o.height, o.fps, o.bitrate, o.noise)
 }
 
-func encodeClipAt(ctx context.Context, width, height, fps, bitrate int) (*clip, error) {
-	o := options{width: width, height: height, fps: fps, bitrate: bitrate}
-	name := fmt.Sprintf("cupstream-loadtest-%dx%d-%d-%d.h264", o.width, o.height, o.fps, o.bitrate)
+func encodeClipAt(ctx context.Context, width, height, fps, bitrate, noise int) (*clip, error) {
+	o := options{width: width, height: height, fps: fps, bitrate: bitrate, noise: noise}
+	name := fmt.Sprintf("cupstream-loadtest-%dx%d-%d-%d-n%d.h264", o.width, o.height, o.fps, o.bitrate, o.noise)
 	path := filepath.Join(os.TempDir(), name)
 	if _, err := os.Stat(path); err != nil {
 		log.Printf("encoding the test clip with ffmpeg (once): %s", path)
 		b := strconv.Itoa(o.bitrate)
 		cmd := exec.CommandContext(ctx, "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
-			"-f", "lavfi", "-i", fmt.Sprintf("testsrc2=size=%dx%d:rate=%d,noise=alls=30:allf=t", o.width, o.height, o.fps),
+			"-f", "lavfi", "-i", fmt.Sprintf("testsrc2=size=%dx%d:rate=%d,noise=alls=%d:allf=t", o.width, o.height, o.fps, o.noise),
 			"-t", "10", "-c:v", "libx264", "-preset", "veryfast", "-profile:v", "baseline", "-bf", "0",
 			"-g", strconv.Itoa(2*o.fps), "-b:v", b, "-maxrate", b, "-bufsize", b, "-pix_fmt", "yuv420p",
 			"-x264-params", "slices=1", "-f", "h264", path+".tmp")

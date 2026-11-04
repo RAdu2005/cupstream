@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -31,8 +32,10 @@ type reporter struct {
 	peakRecv    float64
 	peakMtxOut  float64
 	peakCPU     map[string]float64
-	starvedAt   time.Duration // first second with more than 5% starved viewers
-	errors      map[string]int
+	// The most FFmpeg processes MediaMTX ran at once.
+	peakTranscodes int
+	starvedAt      time.Duration // first second with more than 5% starved viewers
+	errors         map[string]int
 }
 
 func newReporter(o options) *reporter {
@@ -98,7 +101,8 @@ func (r *reporter) line(elapsed time.Duration) {
 			settled := now.Sub(time.Unix(0, v.firstKey.Load())) > 2*time.Second
 			want := r.o.bitrate
 			if v.low {
-				want = r.o.lowBitrate
+				// Sent by the publisher, or else transcoded by MediaMTX.
+				want = cmp.Or(r.o.lowBitrate, transcodeBitrate)
 			}
 			if !first && settled && want > 0 && float64(db*8)/secs < 0.8*float64(want) {
 				starved++
@@ -150,7 +154,44 @@ func (r *reporter) line(elapsed time.Duration) {
 			fmt.Fprintf(&b, "  %s cpu %4.0f%%", p.name, pct)
 		}
 	}
+	if r.o.mediamtxPID != 0 {
+		// MediaMTX's children: the FFmpeg transcodes it runs on demand.
+		var total float64
+		children := childrenOf(r.o.mediamtxPID)
+		for _, pid := range children {
+			if pct, ok := r.cpuPercent("child "+strconv.Itoa(pid), pid, now); ok {
+				total += pct
+			}
+		}
+		if len(children) > 0 {
+			r.peakCPU["transcodes"] = max(r.peakCPU["transcodes"], total)
+			r.peakTranscodes = max(r.peakTranscodes, len(children))
+			fmt.Fprintf(&b, "  transcodes %d cpu %4.0f%%", len(children), total)
+		}
+	}
 	log.Print(b.String())
+}
+
+// childrenOf lists the processes whose parent is pid.
+func childrenOf(pid int) []int {
+	entries, _ := os.ReadDir("/proc")
+	var out []int
+	for _, e := range entries {
+		child, err := strconv.Atoi(e.Name())
+		if err != nil {
+			continue
+		}
+		raw, err := os.ReadFile("/proc/" + e.Name() + "/stat")
+		if err != nil {
+			continue
+		}
+		s := string(raw)
+		fields := strings.Fields(s[strings.LastIndexByte(s, ')')+1:])
+		if len(fields) > 1 && fields[1] == strconv.Itoa(pid) {
+			out = append(out, child)
+		}
+	}
+	return out
 }
 
 func (r *reporter) summary() {
@@ -177,6 +218,9 @@ func (r *reporter) summary() {
 	}
 	if r.starvedAt > 0 {
 		log.Printf("  more than 5%% of viewers got under 80%% of the bitrate from %ds on", int(r.starvedAt.Seconds()))
+	}
+	if r.peakTranscodes > 0 {
+		log.Printf("  at most %d transcodes ran at once", r.peakTranscodes)
 	}
 	for name, p := range r.peakCPU {
 		log.Printf("  peak CPU of %s: %.0f%% of one core", name, p)
@@ -213,6 +257,10 @@ func mediamtxSent(api string) (int64, error) {
 	}
 	return n, nil
 }
+
+// transcodeBitrate is the video bitrate of the server's transcodes
+// (runOnDemand in deploy/mediamtx/mediamtx.yml).
+const transcodeBitrate = 1_200_000
 
 type cpuSample struct {
 	ticks int64
