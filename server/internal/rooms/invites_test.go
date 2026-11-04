@@ -40,7 +40,7 @@ func newFixture(t *testing.T) *fixture {
 
 func (f *fixture) user(t *testing.T, name string) store.User {
 	t.Helper()
-	u, _, err := auth.NewAccounts(f.db, nil).SignIn(context.Background(), oauth.Identity{Provider: "dev", Subject: name, Username: name})
+	u, err := auth.NewAccounts(f.db, nil).SignUp(context.Background(), oauth.Identity{Provider: "dev", Subject: name, Username: name}, name, name)
 	if err != nil {
 		t.Fatal(err)
 	}

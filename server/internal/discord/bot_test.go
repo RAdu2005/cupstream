@@ -127,7 +127,7 @@ func newFixture(t *testing.T) *fixture {
 // link signs in a CupStream user with this Discord ID.
 func (f *fixture) link(discordID string) store.User {
 	f.t.Helper()
-	u, _, err := auth.NewAccounts(f.db, nil).SignIn(context.Background(), oauth.Identity{Provider: oauth.Discord, Subject: discordID, Username: discordID})
+	u, err := auth.NewAccounts(f.db, nil).SignUp(context.Background(), oauth.Identity{Provider: oauth.Discord, Subject: discordID, Username: discordID}, discordID, discordID)
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -369,7 +369,7 @@ func TestRechecks(t *testing.T) {
 func TestDiscordRoomAccess(t *testing.T) {
 	f := newFixture(t)
 	alice := f.link("alice")
-	google, _, err := auth.NewAccounts(f.db, nil).SignIn(context.Background(), oauth.Identity{Provider: oauth.Google, Subject: "g", Username: "g"})
+	google, err := auth.NewAccounts(f.db, nil).SignUp(context.Background(), oauth.Identity{Provider: oauth.Google, Subject: "g", Username: "gina"}, "gina", "Gina")
 	if err != nil {
 		t.Fatal(err)
 	}

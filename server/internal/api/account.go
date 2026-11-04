@@ -16,10 +16,23 @@ type Settings struct {
 
 // Account is the response of GET /api/account.
 type Account struct {
-	User       User       `json:"user"`
-	Identities []Identity `json:"identities"`
-	Settings   Settings   `json:"settings"`
-	RoomSlug   string     `json:"roomSlug"` // the user's link room
+	User       User        `json:"user"`
+	Identities []Identity  `json:"identities"`
+	Settings   Settings    `json:"settings"`
+	RoomSlug   string      `json:"roomSlug"` // the user's link room, named by their handle
+	Handle     HandleRules `json:"handle"`
+}
+
+// HandleRules is what the renaming rules allow now: one change of handle a
+// week, and for a day after a change, switching back to the previous handle,
+// which undoes it. Times are Unix seconds.
+type HandleRules struct {
+	// NextChangeAt is when the handle may change again; absent: now.
+	NextChangeAt int64 `json:"nextChangeAt,omitempty"`
+	// Previous is the handle given up last, which the user may switch back to
+	// until PreviousUntil.
+	Previous      string `json:"previous,omitempty"`
+	PreviousUntil int64  `json:"previousUntil,omitempty"`
 }
 
 type UpdateProfileRequest struct {

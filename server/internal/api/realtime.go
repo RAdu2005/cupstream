@@ -89,6 +89,15 @@ type RoomChanged struct {
 	Room string `json:"room"`
 }
 
+// RoomRenamed means the room's owner changed their handle, which names
+// their link room: the subscription continues under the new slug, and the
+// client follows it there.
+type RoomRenamed struct {
+	Type string `json:"type" tstype:"'roomRenamed'"`
+	Room string `json:"room"` // the old slug
+	Slug string `json:"slug"` // the new one
+}
+
 type PresenceEvent struct {
 	Type     string   `json:"type" tstype:"'presence'"`
 	Room     string   `json:"room"`

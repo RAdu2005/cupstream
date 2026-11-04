@@ -1,6 +1,6 @@
 import { Copy, Lock, WifiOff } from 'lucide-react';
-import { useState } from 'react';
-import { Link, useParams } from 'react-router';
+import { useEffect, useState } from 'react';
+import { Link, useLocation, useNavigate, useParams } from 'react-router';
 import { useMe } from '@/api/auth';
 import { ApiError } from '@/api/client';
 import { useRoomRealtime } from '@/api/realtime';
@@ -22,6 +22,13 @@ export function Room() {
   const room = useRoom(slug);
   const { data: me } = useMe();
   const live = useRoomRealtime(slug, room.isSuccess && !room.error);
+  const navigate = useNavigate();
+  const { search } = useLocation();
+
+  // The owner changed their handle, which names the room.
+  useEffect(() => {
+    if (live.renamed?.from === slug) void navigate(`/r/${live.renamed.to}${search}`, { replace: true });
+  }, [live.renamed, slug, search, navigate]);
 
   if (room.isPending) return null;
   if (room.error) return <RoomRefused error={room.error} />;
@@ -57,7 +64,7 @@ export function Room() {
 
       {data.kind === 'discord' && <StreamMovedNotice slug={data.slug} streams={data.streams} />}
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
-        <RoomStreams key={data.slug} room={data} viewerStats={live.viewerStats} />
+        <RoomStreams key={data.id} room={data} viewerStats={live.viewerStats} />
         <aside className="flex flex-col gap-4">
           <PresenceList
             presence={live.presence}

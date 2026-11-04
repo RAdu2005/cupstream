@@ -3,6 +3,7 @@ package httpapi
 import (
 	"database/sql"
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -46,11 +47,23 @@ func (s *Server) account(w http.ResponseWriter, r *http.Request, cur auth.Curren
 		internalError(w, r, err)
 		return
 	}
+	handle, err := s.Accounts.HandleStatus(ctx, cur.User.ID)
+	if err != nil {
+		internalError(w, r, err)
+		return
+	}
 	out := api.Account{
 		User:       view.User(cur.User),
 		Identities: []api.Identity{},
 		Settings:   api.Settings{StartMode: settings.StartMode, ObsFallback: settings.ObsFallback},
 		RoomSlug:   room.Slug,
+		Handle:     api.HandleRules{Previous: handle.Previous},
+	}
+	if !handle.NextChange.IsZero() {
+		out.Handle.NextChangeAt = handle.NextChange.Unix()
+	}
+	if handle.Previous != "" {
+		out.Handle.PreviousUntil = handle.PreviousUntil.Unix()
 	}
 	for _, id := range ids {
 		out.Identities = append(out.Identities, api.Identity{Provider: id.Provider, Username: id.Username})
@@ -63,18 +76,37 @@ func (s *Server) updateProfile(w http.ResponseWriter, r *http.Request, cur auth.
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	u, err := s.Accounts.UpdateProfile(r.Context(), cur.User.ID, req.Handle, req.DisplayName)
+	ctx := r.Context()
+	owner := sql.NullString{String: cur.User.ID, Valid: true}
+	before, err := s.DB.GetLinkRoomByOwner(ctx, owner)
+	if err != nil {
+		internalError(w, r, err)
+		return
+	}
+	u, err := s.Accounts.UpdateProfile(ctx, cur.User.ID, req.Handle, req.DisplayName)
+	var cooldown *auth.HandleCooldownError
 	switch {
+	case errors.As(err, &cooldown):
+		writeErrorCode(w, http.StatusConflict, "handle_cooldown", err.Error())
+		return
 	case errors.Is(err, auth.ErrHandleTaken):
 		writeError(w, http.StatusConflict, err.Error())
+		return
 	case errors.Is(err, auth.ErrInvalidHandle), errors.Is(err, auth.ErrInvalidName):
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
 	case err != nil:
 		internalError(w, r, err)
-	default:
-		s.Realtime.UserChanged(view.User(u))
-		writeJSON(w, http.StatusOK, api.Me{User: view.User(u)})
+		return
 	}
+	s.Realtime.UserChanged(view.User(u))
+	// The handle names the user's link room: the people in it follow it.
+	if room, err := s.DB.GetLinkRoomByOwner(ctx, owner); err != nil {
+		slog.ErrorContext(ctx, "loading the renamed room failed", "err", err)
+	} else if room.Slug != before.Slug {
+		s.Realtime.RoomRenamed(ctx, room, before.Slug)
+	}
+	writeJSON(w, http.StatusOK, api.Me{User: view.User(u)})
 }
 
 func (s *Server) updateSettings(w http.ResponseWriter, r *http.Request, cur auth.Current) {

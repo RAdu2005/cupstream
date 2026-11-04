@@ -46,6 +46,7 @@ function setup(roomResponses: Response[]) {
     if (url === '/api/me') return json(200, { user: bob });
     if (url.startsWith('/api/bandwidth-test')) return testDownload();
     if (url === '/api/rooms/abc') return roomResponses.shift() ?? json(200, room);
+    if (url === '/api/rooms/alicia') return json(200, { ...room, slug: 'alicia' });
     throw new Error(`unexpected fetch ${url}`);
   });
   vi.stubGlobal('fetch', fetchMock);
@@ -141,6 +142,23 @@ test('fetches the room again after reconnecting', async () => {
   act(() => again.receive({ ...snapshot, streams: [{ ...stream, state: 'live' }] }));
   expect(await screen.findByText('Everyone with the link')).toBeInTheDocument();
   expect(fetchMock.mock.calls.filter(([url]) => url === '/api/rooms/abc')).toHaveLength(2);
+});
+
+test('follows the room when its owner changes their handle', async () => {
+  const fetchMock = setup([json(200, room)]);
+  await screen.findByText('Nobody is live in this room');
+  const ws = await connected();
+  act(() =>
+    ws.receive({ type: 'subscribed', room: 'abc', streams: [], presence: { members: [bob], anonymous: 0 }, chat: [] }),
+  );
+
+  act(() => ws.receive({ type: 'roomRenamed', room: 'abc', slug: 'alicia' }));
+  await waitFor(() => expect(ws.sent).toContainEqual({ type: 'subscribe', room: 'alicia' }));
+  expect(fetchMock.mock.calls.some(([url]) => url === '/api/rooms/alicia')).toBe(true);
+  expect(screen.getByText('Nobody is live in this room')).toBeInTheDocument();
+  const message = { id: 'm1', user: bob, body: 'still here', createdAt: Date.now() / 1000 };
+  act(() => ws.receive({ type: 'chat', room: 'alicia', message }));
+  expect(await screen.findByText(/still here/)).toBeInTheDocument();
 });
 
 test('shows the refusal when access ends', async () => {

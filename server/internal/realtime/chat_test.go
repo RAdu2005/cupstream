@@ -43,7 +43,7 @@ func TestChatExpiry(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	u, _, err := auth.NewAccounts(db, nil).SignIn(ctx, oauth.Identity{Provider: auth.ProviderDev, Subject: "alice", Username: "alice"})
+	u, err := auth.NewAccounts(db, nil).SignUp(ctx, oauth.Identity{Provider: auth.ProviderDev, Subject: "alice", Username: "alice"}, "alice", "alice")
 	if err != nil {
 		t.Fatal(err)
 	}

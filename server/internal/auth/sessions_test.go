@@ -19,7 +19,7 @@ func TestSessionLifecycle(t *testing.T) {
 	}
 	defer db.Close()
 
-	user, _, err := NewAccounts(db, nil).SignIn(ctx, oauth.Identity{Provider: ProviderDev, Subject: "alice", Username: "alice", DisplayName: "Alice"})
+	user, err := NewAccounts(db, nil).SignUp(ctx, oauth.Identity{Provider: ProviderDev, Subject: "alice", Username: "alice", DisplayName: "Alice"}, "alice", "Alice")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,8 +80,8 @@ func TestListAndRevoke(t *testing.T) {
 	}
 	defer db.Close()
 	acc := NewAccounts(db, nil)
-	alice, _, _ := acc.SignIn(ctx, oauth.Identity{Provider: ProviderDev, Subject: "alice", Username: "alice"})
-	bob, _, _ := acc.SignIn(ctx, oauth.Identity{Provider: ProviderDev, Subject: "bob", Username: "bob"})
+	alice, _ := acc.SignUp(ctx, oauth.Identity{Provider: ProviderDev, Subject: "alice", Username: "alice"}, "alice", "alice")
+	bob, _ := acc.SignUp(ctx, oauth.Identity{Provider: ProviderDev, Subject: "bob", Username: "bob"}, "bob", "bob")
 
 	s := NewSessions(db, false)
 	for range 2 {
@@ -124,7 +124,7 @@ func TestAppSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	user, _, err := NewAccounts(db, nil).SignIn(ctx, oauth.Identity{Provider: ProviderDev, Subject: "alice", Username: "alice", DisplayName: "Alice"})
+	user, err := NewAccounts(db, nil).SignUp(ctx, oauth.Identity{Provider: ProviderDev, Subject: "alice", Username: "alice", DisplayName: "Alice"}, "alice", "Alice")
 	if err != nil {
 		t.Fatal(err)
 	}

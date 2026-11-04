@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/big"
@@ -33,7 +32,24 @@ var (
 	// ErrBanned refuses signing in as, linking or merging an account that an
 	// admin banned.
 	ErrBanned = errors.New("this account is banned")
+	// ErrNoAccount is a new user signing in, who chooses a handle first.
+	ErrNoAccount = errors.New("no account for this identity")
 )
+
+const (
+	// A user may change their handle this often.
+	handleChangeInterval = 7 * 24 * time.Hour
+	// The handle a user gave up stays theirs this long: nobody else may take
+	// it, and they may switch back to it.
+	handleReserved = 24 * time.Hour
+)
+
+// HandleCooldownError refuses a change of handle within a week of the last.
+type HandleCooldownError struct{ Until time.Time }
+
+func (e *HandleCooldownError) Error() string {
+	return "you can change your handle once a week"
+}
 
 // OwnedByOtherError is returned when linking an identity that already
 // belongs to another account; the user can merge the accounts.
@@ -76,43 +92,64 @@ func NewAccounts(db *store.DB, discord *DiscordSync) *Accounts {
 	return &Accounts{db: db, discord: discord, now: time.Now}
 }
 
-// SignIn returns the user that owns id, creating the account (with its
-// settings and link room) on first sign-in.
-func (a *Accounts) SignIn(ctx context.Context, id oauth.Identity) (u store.User, created bool, err error) {
-	u, err = a.db.GetUserByIdentity(ctx, store.GetUserByIdentityParams{Provider: id.Provider, Subject: id.Subject})
+// SignIn returns the user that owns id, or ErrNoAccount for a new user, who
+// signs up first (SignUp).
+func (a *Accounts) SignIn(ctx context.Context, id oauth.Identity) (store.User, error) {
+	u, err := a.db.GetUserByIdentity(ctx, store.GetUserByIdentityParams{Provider: id.Provider, Subject: id.Subject})
 	switch {
-	case err == nil:
-		if u.BannedAt.Valid {
-			return u, false, ErrBanned
-		}
-		if err := a.refreshIdentity(ctx, u.ID, id); err != nil {
-			return u, false, err
-		}
-		return u, false, nil
-	case !errors.Is(err, sql.ErrNoRows):
-		return u, false, err
+	case errors.Is(err, sql.ErrNoRows):
+		return u, ErrNoAccount
+	case err != nil:
+		return u, err
+	case u.BannedAt.Valid:
+		return u, ErrBanned
 	}
-
-	err = a.db.Tx(ctx, func(q *store.Queries) error {
-		u, err = a.createUser(ctx, q, id)
-		return err
-	})
-	if err == nil {
-		err = a.afterIdentity(ctx, u.ID, id)
-	}
-	return u, true, err
+	return u, a.refreshIdentity(ctx, u.ID, id)
 }
 
-func (a *Accounts) createUser(ctx context.Context, q *store.Queries, id oauth.Identity) (store.User, error) {
-	now := a.now().Unix()
-	handle, err := freeHandle(ctx, q, handleBase(id.Username))
+// SignUp creates the account of id, with its settings and link room, under
+// the handle and display name the user chose. If id already has an account
+// (signing up twice), it signs in to it instead.
+func (a *Accounts) SignUp(ctx context.Context, id oauth.Identity, handle, displayName string) (store.User, error) {
+	h, err := NormalizeHandle(handle)
 	if err != nil {
 		return store.User{}, err
 	}
-	name := truncateName(id.DisplayName)
-	if name == "" {
-		name = handle
+	name, err := normalizeName(displayName)
+	if err != nil {
+		return store.User{}, err
 	}
+	var u store.User
+	created := false
+	err = a.db.Tx(ctx, func(q *store.Queries) error {
+		_, err := q.GetUserByIdentity(ctx, store.GetUserByIdentityParams{Provider: id.Provider, Subject: id.Subject})
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		taken, err := q.HandleTaken(ctx, store.HandleTakenParams{Handle: h, Since: a.now().Add(-handleReserved).Unix()})
+		if err != nil {
+			return err
+		}
+		if taken {
+			return ErrHandleTaken
+		}
+		u, err = a.createUser(ctx, q, id, h, name)
+		created = err == nil
+		return err
+	})
+	switch {
+	case store.IsUniqueViolation(err):
+		return u, ErrHandleTaken
+	case err != nil:
+		return u, err
+	case !created:
+		return a.SignIn(ctx, id)
+	}
+	return u, a.afterIdentity(ctx, u.ID, id)
+}
+
+func (a *Accounts) createUser(ctx context.Context, q *store.Queries, id oauth.Identity, handle, name string) (store.User, error) {
+	now := a.now().Unix()
 	u, err := q.CreateUser(ctx, store.CreateUserParams{
 		ID:          uuid.Must(uuid.NewV7()).String(),
 		Handle:      handle,
@@ -132,26 +169,37 @@ func (a *Accounts) createUser(ctx context.Context, q *store.Queries, id oauth.Id
 		return u, err
 	}
 	_, err = q.CreateLinkRoom(ctx, store.CreateLinkRoomParams{
-		ID: uuid.Must(uuid.NewV7()).String(), Slug: randomHex(5), OwnerID: nullString(u.ID), CreatedAt: now,
+		ID: uuid.Must(uuid.NewV7()).String(), Slug: handle, OwnerID: nullString(u.ID), CreatedAt: now,
 	})
 	return u, err
 }
 
-// freeHandle returns base, or base with a random number when it is taken.
-func freeHandle(ctx context.Context, q *store.Queries, base string) (string, error) {
+// SuggestHandle proposes a free handle for a new user from their name at
+// the provider: the name itself, or with a random number when it is taken.
+func (a *Accounts) SuggestHandle(ctx context.Context, id oauth.Identity) (string, error) {
+	base := handleBase(id.Username)
 	h := base
 	for range 20 {
-		taken, err := q.HandleTaken(ctx, h)
+		ok, err := a.HandleAvailable(ctx, "", h)
 		if err != nil {
 			return "", err
 		}
-		if !taken {
+		if ok {
 			return h, nil
 		}
 		n, _ := rand.Int(rand.Reader, big.NewInt(10000))
 		h = fmt.Sprintf("%s_%d", base, n.Int64())
 	}
 	return "", errors.New("could not find a free handle")
+}
+
+// HandleAvailable reports whether userID ("" for a new user) may take
+// handle, which is normalized.
+func (a *Accounts) HandleAvailable(ctx context.Context, userID, handle string) (bool, error) {
+	taken, err := a.db.HandleTaken(ctx, store.HandleTakenParams{
+		Handle: handle, UserID: userID, Since: a.now().Add(-handleReserved).Unix(),
+	})
+	return !taken, err
 }
 
 // refreshIdentity updates what we show from the provider on each sign-in.
@@ -314,35 +362,112 @@ func (a *Accounts) moveDiscordData(ctx context.Context, q *store.Queries, from, 
 	return nil
 }
 
-// UpdateProfile changes the user's handle and display name.
+// HandleStatus is what the renaming rules allow a user now.
+type HandleStatus struct {
+	// NextChange is when the user may next change their handle; zero: now.
+	NextChange time.Time
+	// Previous is the handle they gave up last, which they may switch back to
+	// until PreviousUntil; empty when they cannot.
+	Previous      string
+	PreviousUntil time.Time
+}
+
+// HandleStatus returns what the renaming rules allow userID now.
+func (a *Accounts) HandleStatus(ctx context.Context, userID string) (HandleStatus, error) {
+	var st HandleStatus
+	last, err := a.db.LastHandleChange(ctx, userID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return st, nil
+	}
+	if err != nil {
+		return st, err
+	}
+	now := a.now()
+	changed := time.Unix(last.ChangedAt, 0)
+	if next := changed.Add(handleChangeInterval); now.Before(next) {
+		st.NextChange = next
+	}
+	if until := changed.Add(handleReserved); now.Before(until) {
+		st.Previous, st.PreviousUntil = last.OldHandle, until
+	}
+	return st, nil
+}
+
+// UpdateProfile changes the user's handle, and with it their link room's
+// slug, and display name. A user may change their handle once a week; the
+// handle they gave up stays reserved to them for a day, and switching back
+// to it within that day undoes the change, which then does not count.
 func (a *Accounts) UpdateProfile(ctx context.Context, userID, handle, displayName string) (store.User, error) {
 	h, err := NormalizeHandle(handle)
 	if err != nil {
 		return store.User{}, err
 	}
-	name := strings.TrimSpace(displayName)
-	if name == "" || utf8.RuneCountInString(name) > 48 {
-		return store.User{}, ErrInvalidName
+	name, err := normalizeName(displayName)
+	if err != nil {
+		return store.User{}, err
 	}
-	u, err := a.db.UpdateProfile(ctx, store.UpdateProfileParams{Handle: h, DisplayName: name, ID: userID})
+	var u store.User
+	err = a.db.Tx(ctx, func(q *store.Queries) error {
+		cur, err := q.GetUser(ctx, userID)
+		if err != nil {
+			return err
+		}
+		if h != cur.Handle {
+			if err := a.changeHandle(ctx, q, cur, h); err != nil {
+				return err
+			}
+		}
+		u, err = q.UpdateProfile(ctx, store.UpdateProfileParams{Handle: h, DisplayName: name, ID: userID})
+		return err
+	})
 	if store.IsUniqueViolation(err) {
 		return u, ErrHandleTaken
 	}
 	return u, err
 }
 
-func truncateName(s string) string {
-	s = strings.TrimSpace(s)
-	if utf8.RuneCountInString(s) > 48 {
-		s = string([]rune(s)[:48])
+// changeHandle applies the renaming rules to cur's change of handle to h,
+// records it and moves their link room to h.
+func (a *Accounts) changeHandle(ctx context.Context, q *store.Queries, cur store.User, h string) error {
+	now := a.now()
+	last, err := q.LastHandleChange(ctx, cur.ID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
 	}
-	return s
+	recent := err == nil
+	changed := time.Unix(last.ChangedAt, 0)
+	switch {
+	case recent && last.OldHandle == h && last.NewHandle == cur.Handle && now.Before(changed.Add(handleReserved)):
+		if err := q.UndoHandleChange(ctx, store.UndoHandleChangeParams{
+			UndoneAt: sql.NullInt64{Int64: now.Unix(), Valid: true}, ID: last.ID,
+		}); err != nil {
+			return err
+		}
+	case recent && now.Before(changed.Add(handleChangeInterval)):
+		return &HandleCooldownError{Until: changed.Add(handleChangeInterval)}
+	default:
+		taken, err := q.HandleTaken(ctx, store.HandleTakenParams{Handle: h, UserID: cur.ID, Since: now.Add(-handleReserved).Unix()})
+		if err != nil {
+			return err
+		}
+		if taken {
+			return ErrHandleTaken
+		}
+		if err := q.CreateHandleChange(ctx, store.CreateHandleChangeParams{
+			UserID: cur.ID, OldHandle: cur.Handle, NewHandle: h, ChangedAt: now.Unix(),
+		}); err != nil {
+			return err
+		}
+	}
+	return q.SetLinkRoomSlug(ctx, store.SetLinkRoomSlugParams{Slug: h, OwnerID: nullString(cur.ID)})
 }
 
-func randomHex(n int) string {
-	b := make([]byte, n)
-	rand.Read(b)
-	return hex.EncodeToString(b)
+func normalizeName(s string) (string, error) {
+	name := strings.TrimSpace(s)
+	if name == "" || utf8.RuneCountInString(name) > 48 {
+		return "", ErrInvalidName
+	}
+	return name, nil
 }
 
 func nullString(s string) sql.NullString { return sql.NullString{String: s, Valid: s != ""} }

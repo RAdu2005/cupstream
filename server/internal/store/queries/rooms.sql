@@ -12,6 +12,9 @@ SELECT * FROM rooms WHERE slug = ?;
 -- name: GetLinkRoomByOwner :one
 SELECT * FROM rooms WHERE kind = 'link' AND owner_id = ?;
 
+-- name: SetLinkRoomSlug :exec
+UPDATE rooms SET slug = ? WHERE kind = 'link' AND owner_id = ?;
+
 -- name: SetRoomVisibility :exec
 UPDATE rooms SET visibility = ? WHERE id = ? AND kind = 'link';
 

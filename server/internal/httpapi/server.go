@@ -62,6 +62,7 @@ func (s *Server) Handler() http.Handler {
 	}
 	mux.HandleFunc("GET /api/auth/{provider}/start", s.oauthStart)
 	mux.HandleFunc("GET /api/auth/{provider}/callback", s.oauthCallback)
+	s.signUpRoutes(mux)
 	mux.Handle("GET /api/me", requireUser(s.me))
 	mux.Handle("POST /api/app/authorize", requireUser(s.appAuthorize))
 	mux.HandleFunc("POST /api/app/token", s.appToken)

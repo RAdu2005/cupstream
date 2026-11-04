@@ -31,7 +31,25 @@ export interface Account {
   user: User;
   identities: Identity[];
   settings: Settings;
-  roomSlug: string; // the user's link room
+  roomSlug: string; // the user's link room, named by their handle
+  handle: HandleRules;
+}
+/**
+ * HandleRules is what the renaming rules allow now: one change of handle a
+ * week, and for a day after a change, switching back to the previous handle,
+ * which undoes it. Times are Unix seconds.
+ */
+export interface HandleRules {
+  /**
+   * NextChangeAt is when the handle may change again; absent: now.
+   */
+  nextChangeAt?: number /* int64 */;
+  /**
+   * Previous is the handle given up last, which the user may switch back to
+   * until PreviousUntil.
+   */
+  previous?: string;
+  previousUntil?: number /* int64 */;
 }
 export interface UpdateProfileRequest {
   handle: string;
@@ -231,6 +249,34 @@ export interface AuthProviders {
  */
 export interface DevLoginRequest {
   handle: string;
+}
+/**
+ * PendingSignUp is the response of GET /api/auth/signup: a new user who
+ * signed in with a provider, and chooses their handle before their account
+ * is created.
+ */
+export interface PendingSignUp {
+  provider: AuthProvider;
+  username: string; // at the provider
+  displayName: string;
+  avatarUrl?: string;
+  handle: string; // a free handle to suggest
+}
+/**
+ * SignUpRequest is the body of POST /api/auth/signup, which creates the
+ * account, signs the new user in and answers with Me.
+ */
+export interface SignUpRequest {
+  handle: string;
+  displayName: string;
+}
+/**
+ * HandleCheck is the response of GET /api/auth/handle?handle=: whether the
+ * signed-in user, or a new one, may take the handle, or why not.
+ */
+export interface HandleCheck {
+  available: boolean;
+  error?: string;
 }
 
 //////////
@@ -613,6 +659,16 @@ export interface Refused {
 export interface RoomChanged {
   type: 'roomChanged';
   room: string;
+}
+/**
+ * RoomRenamed means the room's owner changed their handle, which names
+ * their link room: the subscription continues under the new slug, and the
+ * client follows it there.
+ */
+export interface RoomRenamed {
+  type: 'roomRenamed';
+  room: string; // the old slug
+  slug: string; // the new one
 }
 export interface PresenceEvent {
   type: 'presence';

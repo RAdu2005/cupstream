@@ -19,6 +19,8 @@ type State = {
   kicked: boolean;
   /** The last message sent, given back if the server refuses it. */
   lastSent: { ref: string; body: string } | null;
+  /** The room's old and new slug, once its owner changed their handle. */
+  renamed: { from: string; to: string } | null;
 };
 
 type Action =
@@ -34,6 +36,7 @@ const initial: State = {
   chatError: null,
   kicked: false,
   lastSent: null,
+  renamed: null,
 };
 
 function notExpired(now: number) {
@@ -64,6 +67,8 @@ function reduce(state: State, action: Action): State {
       return { ...state, chat: [...state.chat, msg.message] };
     case 'chatDeleted':
       return { ...state, chat: state.chat.filter((m) => m.id !== msg.id) };
+    case 'roomRenamed':
+      return { ...state, renamed: { from: msg.room, to: msg.slug } };
     case 'viewerStats':
       return { ...state, viewerStats: { ...state.viewerStats, [msg.streamId]: msg } };
     case 'error': {
@@ -74,6 +79,10 @@ function reduce(state: State, action: Action): State {
     }
   }
   return state;
+}
+
+function withSlug(room: Room | undefined, slug: string): Room | undefined {
+  return room && { ...room, slug };
 }
 
 function upsertStream(streams: Stream[], s: Stream) {
@@ -123,6 +132,12 @@ export function useRoomRealtime(slug: string, enabled: boolean) {
         case 'roomChanged':
           // The room page shows why access ended, or the new settings.
           void qc.invalidateQueries({ queryKey: roomKey(slug), exact: true });
+          break;
+        case 'roomRenamed':
+          // The room page follows it to its new slug, showing what it has
+          // until the room is fetched there.
+          qc.setQueryData<Room>(roomKey(msg.slug), (r) => r ?? withSlug(qc.getQueryData<Room>(roomKey(slug)), msg.slug));
+          void qc.invalidateQueries({ queryKey: roomKey(msg.slug), exact: true });
           break;
       }
       dispatch({ type: 'message', msg });
