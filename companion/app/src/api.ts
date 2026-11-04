@@ -14,6 +14,8 @@ export interface Status {
   encoder: string | null;
   bitrateKbps: number | null;
   limited: boolean;
+  /** The low-quality version, while live. */
+  low: { state: 'off' | 'waiting' | 'live' | 'retrying' | 'failed'; detail: string } | null;
   warnings: string[];
   audio: { name: string; captured: boolean }[];
   error: string | null;
@@ -32,6 +34,7 @@ export interface Settings {
   audio: AudioSetting;
   audioApp: string;
   hotkey: string;
+  lowQuality: boolean;
   restoreToken: string | null;
   source: string | null;
 }

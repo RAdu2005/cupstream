@@ -58,6 +58,21 @@ pub struct Destination {
     /// session).
     pub stream_id: Option<String>,
     pub room_slug: Option<String>,
+    /// The server takes a low-quality version of this stream, published
+    /// at `whip_url` with `?quality=low` and the same token.
+    pub low_quality: bool,
+}
+
+impl Destination {
+    /// Where the low-quality version is published.
+    pub fn low_whip_url(&self) -> String {
+        let sep = if self.whip_url.contains('?') {
+            '&'
+        } else {
+            '?'
+        };
+        format!("{}{sep}quality=low", self.whip_url)
+    }
 }
 
 /// Options of POST /api/streams.
@@ -172,6 +187,13 @@ impl Client {
             room_slug: String,
             whip_url: String,
             token: String,
+            // Older servers do not send it.
+            #[serde(default)]
+            low_quality: LowQualityOffer,
+        }
+        #[derive(Deserialize, Default)]
+        struct LowQualityOffer {
+            publish: bool,
         }
         #[derive(Deserialize)]
         struct StreamRef {
@@ -194,6 +216,7 @@ impl Client {
             token: r.token,
             stream_id: Some(r.stream.id),
             room_slug: Some(r.room_slug),
+            low_quality: r.low_quality.publish,
         })
     }
 
@@ -218,6 +241,8 @@ impl Client {
             token: key.to_owned(),
             stream_id: None,
             room_slug: room.map(Into::into),
+            // OBS-style /whip has no low-quality version.
+            low_quality: false,
         }
     }
 

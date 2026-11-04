@@ -10,7 +10,8 @@ mod settings;
 use cupstream_client::{Account, ApiError, Client, Destination, SignIn, StartOptions, User};
 use cupstream_media::capture::{self, VideoSource};
 use cupstream_media::encoder::{self, Candidate};
-use cupstream_media::{audio, gst, publish};
+use cupstream_media::low::{LowSettings, LowState};
+use cupstream_media::{audio, publish};
 use serde::Serialize;
 use settings::Settings;
 use std::path::PathBuf;
@@ -43,11 +44,53 @@ pub struct Status {
     /// target is lowering it.
     pub bitrate_kbps: Option<u32>,
     pub limited: bool,
+    /// The low-quality version, while live.
+    pub low: Option<LowView>,
     pub warnings: Vec<String>,
     pub audio: Vec<AudioStream>,
     pub error: Option<String>,
     /// Why the hotkey does not work, if it does not.
     pub hotkey_error: Option<String>,
+}
+
+/// The low-quality version as the window shows it.
+#[derive(Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LowView {
+    /// "off", "waiting", "live", "retrying" or "failed".
+    pub state: &'static str,
+    /// The encoder, the reason it is off, or why it failed.
+    pub detail: String,
+}
+
+impl LowView {
+    /// `offered`: the server takes a low-quality version of this stream.
+    fn of(publisher: &publish::Publisher, offered: bool) -> Self {
+        let off = |detail: &str| LowView {
+            state: "off",
+            detail: detail.into(),
+        };
+        match publisher.low_state() {
+            None if offered => off("turned off in Settings"),
+            None => off("the server does not take one"),
+            Some(LowState::Waiting) => LowView {
+                state: "waiting",
+                detail: String::new(),
+            },
+            Some(LowState::Live { encoder }) => LowView {
+                state: "live",
+                detail: encoder,
+            },
+            Some(LowState::Retrying { reason }) => LowView {
+                state: "retrying",
+                detail: reason,
+            },
+            Some(LowState::Failed { reason }) => LowView {
+                state: "failed",
+                detail: reason,
+            },
+        }
+    }
 }
 
 #[derive(Clone, Serialize, PartialEq)]
@@ -114,7 +157,16 @@ fn publish(
         url: dest.whip_url.clone(),
         token: dest.token.clone(),
     };
-    let publisher = publish::Publisher::new(p.capture, p.audio, p.encoder, video, &endpoint)?;
+    let low = (dest.low_quality && settings.low_quality).then(|| {
+        LowSettings::for_stream(
+            publish::Endpoint {
+                url: dest.low_whip_url(),
+                token: dest.token.clone(),
+            },
+            settings.preset.height(),
+        )
+    });
+    let publisher = publish::Publisher::new(p.capture, p.audio, p.encoder, video, &endpoint, low)?;
     publisher.start()?;
     Ok(publisher)
 }
@@ -461,6 +513,7 @@ impl Core {
             s.bitrate_kbps = None;
             s.limited = false;
             s.audio.clear();
+            s.low = None;
             s.error = error;
         });
     }
@@ -555,7 +608,7 @@ async fn watch(core: Arc<Core>, generation: u64) {
     let mut tick = tokio::time::interval(Duration::from_millis(250));
     loop {
         tick.tick().await;
-        let (error, audio) = {
+        let (error, audio, low) = {
             let live = core.live.lock().unwrap();
             let Some(live) = live.as_ref().filter(|l| l.generation == generation) else {
                 return;
@@ -563,10 +616,12 @@ async fn watch(core: Arc<Core>, generation: u64) {
             let bus = live.publisher.bus();
             let mut error = None;
             while let Some(msg) = bus.pop() {
-                if let gst::MessageView::Error(e) = msg.view() {
-                    error = Some(e.error().to_string());
+                // Errors of the low-quality version are handled inside.
+                if let Some(e) = live.publisher.check(&msg) {
+                    error = Some(e);
                 }
             }
+            let low = LowView::of(&live.publisher, live.dest.low_quality);
             let audio: Vec<AudioStream> = live
                 .publisher
                 .audio()
@@ -580,7 +635,7 @@ async fn watch(core: Arc<Core>, generation: u64) {
                         .collect()
                 })
                 .unwrap_or_default();
-            (error, audio)
+            (error, audio, low)
         };
         if let Some(e) = error {
             if !core.reconnect(generation, e.clone()).await {
@@ -589,8 +644,15 @@ async fn watch(core: Arc<Core>, generation: u64) {
             }
             continue;
         }
-        if core.status.lock().unwrap().audio != audio {
-            core.update_status(|s| s.audio = audio);
+        let changed = {
+            let st = core.status.lock().unwrap();
+            st.audio != audio || st.low.as_ref() != Some(&low)
+        };
+        if changed {
+            core.update_status(|s| {
+                s.audio = audio;
+                s.low = Some(low);
+            });
         }
     }
 }
