@@ -193,6 +193,55 @@ impl Candidate {
         }
     }
 
+    /// Whether the capture should copy frames out of PipeWire's buffers
+    /// itself (see `capture::open`): encoders that take frames in system
+    /// memory get them in shared memory.
+    pub fn copies_from_capture(&self) -> bool {
+        matches!(self.upload, Upload::System | Upload::Cuda)
+    }
+
+    /// The memory the capture should deliver frames in for this encoder:
+    /// DMA-BUF for VA-API (after `capture_copy_description`), system
+    /// memory for the others. Fixed here because the capture runs in a
+    /// pipeline of its own (see `frames`) and cannot see the encoder.
+    pub fn capture_caps(&self) -> gst::Caps {
+        match self.upload {
+            Upload::Va => "video/x-raw(memory:DMABuf)".parse().expect("valid caps"),
+            Upload::D3d11 => "video/x-raw(memory:D3D11Memory); video/x-raw"
+                .parse()
+                .expect("valid caps"),
+            Upload::System | Upload::Cuda => "video/x-raw".parse().expect("valid caps"),
+        }
+    }
+
+    /// A copy at the end of the capture, for encoders on the GPU: the
+    /// compositor's DMA-BUF frame is copied into a new DMA-BUF on the GPU
+    /// and handed back at once, so the frame waiting for the frame clock,
+    /// and the one being encoded, are never the compositor's own (KWin has
+    /// 4). DMA-BUF rather than VA memory, because the publishing pipeline
+    /// has a VA display of its own. vapostproc also makes the capture
+    /// negotiate DMA-BUF, as it did feeding the encoder directly.
+    pub fn capture_copy_description(&self) -> Option<&'static str> {
+        match self.upload {
+            Upload::Va => Some("vapostproc ! capsfilter caps=\"video/x-raw(memory:DMABuf)\""),
+            _ => None,
+        }
+    }
+
+    /// The copy right after the capture, before the stream and its
+    /// low-quality version branch off, for encoders on the GPU: it moves
+    /// each DMA-BUF frame into the GPU's own memory and hands the buffer
+    /// back to the compositor at once, so neither branch holds the
+    /// compositor's few buffers while frames wait or get scaled.
+    pub fn copy_description(&self) -> Option<&'static str> {
+        match self.upload {
+            Upload::Va => {
+                Some("vapostproc ! capsfilter caps=\"video/x-raw(memory:VAMemory),format=NV12\"")
+            }
+            _ => None,
+        }
+    }
+
     /// The caps the encoder's output is restricted to. H.264 without
     /// B-frames, preferring High, then Main, then Constrained Baseline
     /// (OpenH264 only does the last); MediaMTX accepts all three.

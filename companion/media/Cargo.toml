@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 anyhow.workspace = true
 gst.workspace = true
+gst-app = { package = "gstreamer-app", version = "0.25" }
 gst-video.workspace = true
 gst-webrtc.workspace = true
 gst-plugin-webrtc.workspace = true
@@ -24,7 +25,6 @@ ashpd = { version = "0.13", default-features = false, features = ["tokio", "scre
 pipewire = "0.10"
 
 [target.'cfg(windows)'.dependencies]
-gst-app = { package = "gstreamer-app", version = "0.25" }
 png = "0.18"
 sysinfo = { version = "0.40", default-features = false, features = ["system"] }
 windows-sys = { version = "0.61", features = [
@@ -34,5 +34,3 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
-[dev-dependencies]
-gst-app = { package = "gstreamer-app", version = "0.25" }

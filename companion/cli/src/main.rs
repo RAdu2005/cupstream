@@ -443,7 +443,7 @@ async fn publish(server: &str, args: PublishArgs) -> anyhow::Result<()> {
             portal.get("restore").cloned()
         },
     )?;
-    let cap = capture::open(&source, args.fps).await?;
+    let cap = capture::open(&source, args.fps, enc.copies_from_capture()).await?;
     if let Some(t) = &cap.restore_token {
         portal.insert("restore".into(), t.clone());
         save("portal.json", &portal)?;

@@ -13,6 +13,7 @@ use gst::prelude::*;
 use crate::audio::AudioCapture;
 use crate::capture::Capture;
 use crate::encoder::{self, Candidate, Codec};
+use crate::frames::FrameClock;
 use crate::low::{LowCtl, LowSettings, LowState};
 
 /// Where to publish: a WHIP endpoint and its Bearer token.
@@ -44,6 +45,9 @@ pub struct Publisher {
     _capture: Capture,
     audio: Option<AudioCapture>,
     low: Option<LowCtl>,
+    /// The capture's own pipeline and the frame clock (not on Windows yet:
+    /// D3D11 frames would need the device shared between the pipelines).
+    frames: Option<FrameClock>,
 }
 
 impl Publisher {
@@ -101,8 +105,33 @@ impl Publisher {
             .name("video-tee")
             .property("allow-not-linked", true)
             .build()?;
+        let copy = encoder_info
+            .copy_description()
+            .map(|d| gst::parse::bin_from_description(d, true))
+            .transpose()?;
+        let frames = if cfg!(windows) {
+            None
+        } else {
+            Some(FrameClock::new(
+                &capture.bin,
+                encoder_info.capture_copy_description(),
+                encoder_info.capture_caps(),
+                video.fps,
+                pipeline.bus().expect("pipelines have a bus"),
+            )?)
+        };
+        // Where the publishing pipeline's video comes from: the frame clock,
+        // or the capture itself.
+        let video_in: gst::Element = match &frames {
+            Some(f) => f.source.clone().upcast(),
+            None => capture.bin.clone().upcast(),
+        };
+        let capture_out: gst::Element = match &copy {
+            Some(c) => c.clone().upcast(),
+            None => video_in.clone(),
+        };
         pipeline.add_many([
-            capture.bin.upcast_ref(),
+            &video_in,
             &video_tee,
             &queue,
             upload.upcast_ref(),
@@ -110,8 +139,12 @@ impl Publisher {
             &caps,
             &parse,
         ])?;
+        if let Some(copy) = &copy {
+            pipeline.add(copy)?;
+            video_in.link(copy)?;
+        }
         gst::Element::link_many([
-            capture.bin.upcast_ref(),
+            &capture_out,
             &video_tee,
             &queue,
             upload.upcast_ref(),
@@ -169,10 +202,19 @@ impl Publisher {
             _capture: capture,
             audio,
             low,
+            frames,
         })
     }
 
     pub fn start(&self) -> anyhow::Result<()> {
+        // Hand frames to the network as soon as they are encoded. Left to
+        // itself the pipeline configures its sinks with the latency its
+        // elements report (about 50 ms here), and whipclientsink's input
+        // (a clocksync and an appsink) holds every frame that long. That
+        // only delays the stream, and with the leaky queue before the
+        // encoder holding two frames, it also drops every frame beyond
+        // two per hold: about 30 fps of a 60 fps capture.
+        self.pipeline.set_latency(Some(gst::ClockTime::ZERO));
         // Off the async runtime, like stop: a sink that fails to start
         // cleans up inside this call.
         let pipeline = &self.pipeline;
@@ -196,6 +238,12 @@ impl Publisher {
                 "the pipeline did not start ({})",
                 why.as_deref().unwrap_or("no reason given")
             ));
+        }
+        if let Some(frames) = &self.frames
+            && let Err(e) = frames.start(&self.pipeline)
+        {
+            self.stop();
+            return Err(e);
         }
         if let Some(sink) = self.pipeline.by_name("whip") {
             keyframes_until_connected(&sink, &self.encoder);
@@ -247,6 +295,9 @@ impl Publisher {
     pub fn stop(&self) {
         if let Some(low) = &self.low {
             low.stop();
+        }
+        if let Some(frames) = &self.frames {
+            frames.stop();
         }
         let pipeline = &self.pipeline;
         std::thread::scope(|s| {

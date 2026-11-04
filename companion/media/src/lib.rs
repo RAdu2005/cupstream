@@ -6,6 +6,7 @@
 pub mod audio;
 pub mod capture;
 pub mod encoder;
+mod frames;
 pub mod low;
 pub mod publish;
 pub mod watch;

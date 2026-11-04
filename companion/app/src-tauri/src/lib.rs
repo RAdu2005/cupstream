@@ -414,7 +414,12 @@ impl Core {
         let s = settings.clone();
         let this = self.clone();
         let encoder = tokio::task::spawn_blocking(move || this.choose_encoder(&s)).await??;
-        let capture = capture::open(&self.video_source(settings), settings.preset.fps()).await?;
+        let capture = capture::open(
+            &self.video_source(settings),
+            settings.preset.fps(),
+            encoder.copies_from_capture(),
+        )
+        .await?;
         if capture.restore_token.is_some() && capture.restore_token != settings.restore_token {
             let mut st = self.settings.lock().unwrap();
             st.restore_token = capture.restore_token.clone();
